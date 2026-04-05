@@ -178,7 +178,9 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             async_browse_media as ms_browse,
         )
 
-        return await ms_browse(
-            self.hass,
-            f"media-source://navidrome/{media_content_id or ''}",
-        )
+        if media_content_id:
+            uri = f"media-source://navidrome/{media_content_id}"
+        else:
+            uri = "media-source://navidrome"
+
+        return await ms_browse(self.hass, uri)
