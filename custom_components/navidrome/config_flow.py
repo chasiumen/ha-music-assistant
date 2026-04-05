@@ -10,12 +10,18 @@ from urllib.parse import urlparse
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
-from .const import DOMAIN
+from .const import CONF_TARGET_PLAYER, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -141,4 +147,41 @@ class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=REAUTH_DATA_SCHEMA,
             errors=errors,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry,
+    ) -> NavidromeOptionsFlow:
+        """Create the options flow."""
+        return NavidromeOptionsFlow()
+
+
+class NavidromeOptionsFlow(OptionsFlow):
+    """Handle options for the Navidrome integration."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        options_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_TARGET_PLAYER,
+                    default=self.config_entry.options.get(CONF_TARGET_PLAYER, ""),
+                ): EntitySelector(
+                    EntitySelectorConfig(
+                        domain="media_player",
+                    )
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=options_schema,
         )

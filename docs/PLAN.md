@@ -23,9 +23,14 @@ Since HA already has media players that handle playback, our integration is a **
 | Component | Role |
 |---|---|
 | `api.py` | Async Subsonic API client (aiohttp, no external deps) |
-| `config_flow.py` | UI setup: URL + username + password |
-| `media_source.py` | Browse library, search, resolve to stream URLs |
-| `media_player.py` | Lightweight wrapper for voice search+play (optional) |
+| `config_flow.py` | UI setup: URL + username + password + SSL option. Options flow for target player. |
+| `media_source.py` | Browse library, resolve to stream URLs. Used by Media sidebar. |
+| `media_player.py` | Voice search+play entity. Forwards playback to a configured target media player. |
+
+### Two Playback Paths
+
+1. **Media sidebar** → user browses Navidrome via `media_source.py` → picks any speaker at play time
+2. **Voice / Dashboard** → `media_player.py` searches Navidrome → forwards to configured target player
 
 ## Phases
 
