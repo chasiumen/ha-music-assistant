@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.components import media_source
 from homeassistant.components.media_player import (
     BrowseMedia,
     MediaClass,
@@ -16,12 +17,12 @@ from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
+    async_process_play_media_url,
 )
 from homeassistant.components.media_player.browse_media import (
     SearchMedia,
     SearchMediaQuery,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -29,7 +30,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavidromeConfigEntry
 from .api import NavidromeClient
-from .const import DOMAIN, LOGGER
+from .const import CONF_TARGET_PLAYER, DOMAIN, LOGGER
+
+SERVICE_PLAY_MEDIA = "play_media"
 
 
 async def async_setup_entry(
@@ -46,7 +49,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
     This entity provides SEARCH_MEDIA and PLAY_MEDIA features so that
     HA voice intents (HassMediaSearchAndPlay) can search the Navidrome
-    library and play results on any target media player.
+    library and play results on a configured target media player.
     """
 
     _attr_has_entity_name = True
@@ -75,6 +78,11 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     def client(self) -> NavidromeClient:
         """Return the API client."""
         return self._entry.runtime_data
+
+    @property
+    def target_player(self) -> str | None:
+        """Return the configured target media player entity ID."""
+        return self._entry.options.get(CONF_TARGET_PLAYER)
 
     async def async_search_media(
         self,
@@ -152,21 +160,39 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         media_id: str,
         **kwargs: Any,
     ) -> None:
-        """Play a media item.
+        """Play a media item by forwarding to the target media player."""
+        target = self.target_player
+        if not target:
+            LOGGER.warning(
+                "No target media player configured. "
+                "Go to the Navidrome integration options to select one."
+            )
+            return
 
-        If media_id is a direct stream URL, it's ready to play.
-        If it's a media-source URI, it will be resolved by HA's media source system.
-        """
-        # The intent system or UI will call play_media on this entity.
-        # Since this entity doesn't have a physical player, we log the request.
-        # In practice, users should configure an automation or use the media browser
-        # to send content to their actual player.
-        LOGGER.info(
-            "Play media requested: type=%s, id=%s. "
-            "Use a media player (Sonos, Chromecast, etc.) to play this content.",
-            media_type,
-            media_id,
+        # Resolve media-source:// URIs to actual stream URLs
+        if media_source.is_media_source_id(media_id):
+            play_item = await media_source.async_resolve_media(
+                self.hass, media_id, self.entity_id
+            )
+            media_id = play_item.url
+            media_type = play_item.mime_type
+
+        # Forward to the target media player
+        await self.hass.services.async_call(
+            "media_player",
+            SERVICE_PLAY_MEDIA,
+            {
+                "entity_id": target,
+                "media_content_id": async_process_play_media_url(
+                    self.hass, media_id
+                ),
+                "media_content_type": media_type,
+            },
+            blocking=True,
         )
+
+        self._attr_state = MediaPlayerState.PLAYING
+        self.async_write_ha_state()
 
     async def async_browse_media(
         self,

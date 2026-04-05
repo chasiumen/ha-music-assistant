@@ -32,5 +32,19 @@
       "already_configured": "This Navidrome server is already configured.",
       "reauth_successful": "Re-authentication was successful."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Navidrome Options",
+        "description": "Configure playback settings.",
+        "data": {
+          "target_player": "Target media player"
+        },
+        "data_description": {
+          "target_player": "The media player that will play audio from Navidrome (e.g., a Sonos speaker, Chromecast, or browser player)"
+        }
+      }
+    }
   }
 }

@@ -55,17 +55,28 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 
 ## Configuration
 
+### Initial Setup
+
 | Field | Description | Example |
 |-------|-------------|---------|
-| URL | Navidrome server URL | `http://navidrome.local:4533` |
+| URL | Navidrome server URL | `https://navidrome.example.com:4533` |
 | Username | Navidrome username | `admin` |
 | Password | Navidrome password | `***` |
+| Verify SSL | Verify SSL certificate (disable for self-signed certs) | `true` |
+
+### Options (after setup)
+
+Go to **Settings > Devices & Services > Navidrome > Configure** to set:
+
+| Option | Description |
+|--------|-------------|
+| Target media player | The media player to play audio on (e.g., a Sonos speaker, Chromecast, or browser player). Required for voice control and dashboard playback. |
 
 ## Usage
 
-### Media Browser
+### Media Browser (plays on any speaker)
 
-After setup, open any media player's media browser in the HA UI. You'll see **Navidrome** as a media source. Browse by:
+Go to **Media** in the HA sidebar. You'll see **Navidrome** as a media source. Browse by:
 
 - **Artists** > Artist > Albums > Songs
 - **Albums** > Album > Songs
@@ -73,9 +84,13 @@ After setup, open any media player's media browser in the HA UI. You'll see **Na
 - **Genres** > Genre > Albums
 - **Recently Added** / **Most Played** / **Random**
 
-Click any song to play it on the selected media player.
+Select a song, then choose which player to use — **"This Browser"** for local playback through your computer's speakers, or any other media player (Sonos, Chromecast, etc.).
 
-### Voice Control
+### Dashboard Playback (plays on target player)
+
+Add the `media_player.navidrome` entity to your dashboard. When you browse and play from the dashboard card, audio is sent to the **target media player** you configured in the integration options.
+
+### Voice Control (plays on target player)
 
 With a voice pipeline configured (Wyoming STT + OpenAI conversation agent), the integration registers a `media_player.navidrome` entity that supports voice search:
 
