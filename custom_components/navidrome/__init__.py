@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, Platform
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -20,7 +20,8 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: NavidromeConfigEntry
 ) -> bool:
     """Set up Navidrome from a config entry."""
-    session = async_get_clientsession(hass)
+    verify_ssl = entry.data.get(CONF_VERIFY_SSL, True)
+    session = async_get_clientsession(hass, verify_ssl=verify_ssl)
     client = NavidromeClient(
         session,
         entry.data[CONF_URL],

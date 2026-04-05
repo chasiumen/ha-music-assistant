@@ -8,6 +8,7 @@ DOMAIN = "navidrome"
 LOGGER = logging.getLogger(__package__)
 
 DEFAULT_PORT = 4533
+CONF_VERIFY_SSL = "verify_ssl"
 
 SUBSONIC_API_VERSION = "1.16.1"
 SUBSONIC_CLIENT_NAME = "HomeAssistant"

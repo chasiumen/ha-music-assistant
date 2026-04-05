@@ -7,10 +7,12 @@
         "data": {
           "url": "Server URL",
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
-          "url": "The URL of your Navidrome server (e.g., http://navidrome.local:4533)"
+          "url": "The URL of your Navidrome server (e.g., https://navidrome.example.com)",
+          "verify_ssl": "Disable if using a self-signed certificate"
         }
       },
       "reauth_confirm": {

@@ -11,7 +11,7 @@ import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
@@ -24,6 +24,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_URL): str,
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_VERIFY_SSL, default=True): bool,
     }
 )
 
@@ -32,6 +33,11 @@ REAUTH_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): str,
     }
 )
+
+
+def _get_session(hass, verify_ssl: bool) -> aiohttp.ClientSession:
+    """Get an aiohttp session with the correct SSL setting."""
+    return async_get_clientsession(hass, verify_ssl=verify_ssl)
 
 
 class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -48,17 +54,18 @@ class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             url = user_input[CONF_URL].rstrip("/")
             user_input[CONF_URL] = url
+            verify_ssl = user_input.get(CONF_VERIFY_SSL, True)
 
             # Set unique ID based on host:port
             parsed = urlparse(url)
             host = parsed.hostname or "unknown"
-            port = parsed.port or 443 if parsed.scheme == "https" else 4533
+            port = parsed.port or (443 if parsed.scheme == "https" else 4533)
             unique_id = f"{host}:{port}"
 
             await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
 
-            session = async_get_clientsession(self.hass)
+            session = _get_session(self.hass, verify_ssl)
             client = NavidromeClient(
                 session,
                 url,
@@ -68,7 +75,8 @@ class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 await client.ping()
-            except CannotConnect:
+            except CannotConnect as err:
+                _LOGGER.error("Cannot connect to Navidrome: %s", err)
                 errors["base"] = "cannot_connect"
             except AuthenticationFailed:
                 errors["base"] = "invalid_auth"
@@ -104,8 +112,9 @@ class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             reauth_entry = self._get_reauth_entry()
             new_data = {**reauth_entry.data, **user_input}
+            verify_ssl = new_data.get(CONF_VERIFY_SSL, True)
 
-            session = async_get_clientsession(self.hass)
+            session = _get_session(self.hass, verify_ssl)
             client = NavidromeClient(
                 session,
                 new_data[CONF_URL],
@@ -115,7 +124,8 @@ class NavidromeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 await client.ping()
-            except CannotConnect:
+            except CannotConnect as err:
+                _LOGGER.error("Cannot connect to Navidrome: %s", err)
                 errors["base"] = "cannot_connect"
             except AuthenticationFailed:
                 errors["base"] = "invalid_auth"
