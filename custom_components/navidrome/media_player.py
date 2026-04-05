@@ -179,7 +179,10 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         )
 
         if media_content_id:
-            uri = f"media-source://navidrome/{media_content_id}"
+            if media_content_id.startswith("media-source://"):
+                uri = media_content_id
+            else:
+                uri = f"media-source://navidrome/{media_content_id}"
         else:
             uri = "media-source://navidrome"
 
