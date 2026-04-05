@@ -71,8 +71,14 @@ class NavidromeClient:
             ) as response:
                 response.raise_for_status()
                 data = await response.json(content_type=None)
+        except aiohttp.ClientResponseError as err:
+            LOGGER.error("HTTP error from %s: %s %s", url, err.status, err.message)
+            raise CannotConnect(
+                f"HTTP {err.status} from {self._base_url}: {err.message}"
+            ) from err
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise CannotConnect(f"Cannot connect to {self._base_url}") from err
+            LOGGER.error("Connection error to %s: %s", url, err)
+            raise CannotConnect(f"Cannot connect to {self._base_url}: {err}") from err
 
         subsonic_response = data.get("subsonic-response", {})
         status = subsonic_response.get("status")
