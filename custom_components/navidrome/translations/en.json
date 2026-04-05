@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Navidrome",
+        "description": "Enter your Navidrome server details.",
+        "data": {
+          "url": "Server URL",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "url": "The URL of your Navidrome server (e.g., http://navidrome.local:4533)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with Navidrome",
+        "description": "Your credentials for {title} are no longer valid. Please enter your new password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Navidrome server. Please check the URL.",
+      "invalid_auth": "Invalid username or password.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Navidrome server is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  }
+}

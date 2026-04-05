@@ -1,53 +1,57 @@
 # Navidrome Integration for Home Assistant
 
-A [HACS](https://hacs.xyz/) custom component that integrates [Navidrome](https://www.navidrome.org/) music server with Home Assistant as a **media source**.
+A [HACS](https://hacs.xyz/) custom component that integrates [Navidrome](https://www.navidrome.org/) music server with Home Assistant.
 
-Navidrome provides the music library (browse, search, stream URLs); your existing HA media players (Sonos, Chromecast, MPD, etc.) handle actual playback — including pause, play, next, shuffle, repeat, and volume.
+Browse your Navidrome music library, search for songs/albums/artists, and stream audio to any HA media player (Sonos, Chromecast, MPD, etc.) — with full voice control support.
 
 ## Architecture
 
 ```
 User (voice/UI) --> HA Media Browser / Voice Intent
-  --> Navidrome media_source (browse, search, resolve stream URL)
+  --> Navidrome integration (browse, search, resolve stream URL)
   --> Target media_player (Sonos, Chromecast, MPD, etc.)
   --> Audio output
 ```
 
-- **Navidrome integration** = content provider (media_source)
-- **Existing HA media_player** = playback controller (pause, play, next, shuffle, repeat, volume)
-- **Subsonic API** = library access (search, browse, stream)
-- No Jukebox API needed — HA is the client, not Navidrome's server-side player
+The integration provides two components:
 
-### Why media_source, not media_player?
+- **Media Source** — makes your Navidrome library browsable from any HA media player's media browser
+- **Media Player entity** — enables voice search and play via HA's built-in `HassMediaSearchAndPlay` intent
 
-Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). Shuffle, repeat, and pause are all browser-side JavaScript — no server API for these. The Subsonic Jukebox API exists for server-side playback but is a separate mode.
+Playback controls (pause, play, next, shuffle, repeat, volume) are handled by the target media player — Navidrome only provides the music content.
 
-Since HA already has media players (Sonos, Chromecast, etc.) that handle playback perfectly, this integration focuses on being a **music library provider** — just like Jellyfin, Plex, and Immich integrations in HA.
+### Why this approach?
+
+Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). Shuffle, repeat, and pause are browser-side JavaScript with no server API. Since HA already has media players that handle playback, this integration focuses on being a **music library provider** — just like Jellyfin and Plex integrations in HA.
 
 ## Features
 
 - Browse your Navidrome library: Artists, Albums, Playlists, Genres
 - Browse curated lists: Recently Added, Most Played, Random
-- Search songs, albums, and artists
+- Search songs, albums, and artists via voice or UI
 - Stream audio to any HA media player
 - Album art thumbnails in the media browser
 - Voice control via Wyoming STT + OpenAI conversation agent
+- Re-authentication flow when credentials change
+- Subsonic API token+salt authentication (passwords never sent in plaintext)
 
 ## Installation
 
 ### HACS (Recommended)
 
-1. Add this repository as a custom repository in HACS
-2. Search for "Navidrome" and install
-3. Restart Home Assistant
-4. Go to **Settings > Devices & Services > Add Integration > Navidrome**
-5. Enter your Navidrome server URL, username, and password
+1. Open HACS in your HA instance
+2. Click the three dots menu > **Custom repositories**
+3. Add `https://github.com/chasiumen/ha-music-assistant` with category **Integration**
+4. Search for "Navidrome" and install
+5. Restart Home Assistant
+6. Go to **Settings > Devices & Services > Add Integration > Navidrome**
+7. Enter your Navidrome server URL, username, and password
 
 ### Manual
 
 1. Copy `custom_components/navidrome/` to your HA `config/custom_components/` directory
 2. Restart Home Assistant
-3. Add the integration via the UI
+3. Add the integration via **Settings > Devices & Services > Add Integration > Navidrome**
 
 ## Configuration
 
@@ -62,32 +66,31 @@ Since HA already has media players (Sonos, Chromecast, etc.) that handle playbac
 ### Media Browser
 
 After setup, open any media player's media browser in the HA UI. You'll see **Navidrome** as a media source. Browse by:
-- Artists > Artist > Albums > Songs
-- Albums > Album > Songs
-- Playlists > Playlist > Songs
-- Genres > Genre > Albums
-- Recently Added / Most Played / Random
+
+- **Artists** > Artist > Albums > Songs
+- **Albums** > Album > Songs
+- **Playlists** > Playlist > Songs
+- **Genres** > Genre > Albums
+- **Recently Added** / **Most Played** / **Random**
 
 Click any song to play it on the selected media player.
 
 ### Voice Control
 
-With the media_player wrapper enabled and a voice pipeline configured (Wyoming STT + OpenAI conversation agent):
+With a voice pipeline configured (Wyoming STT + OpenAI conversation agent), the integration registers a `media_player.navidrome` entity that supports voice search:
 
 | Voice Command | What Happens |
 |---|---|
-| "Play Beatles on navidrome" | Searches Navidrome, plays first result on target player |
+| "Play Beatles on navidrome" | Searches Navidrome library, plays first result |
+| "Play Abbey Road on navidrome" | Searches for the album, plays it |
 | "Pause the music" | Pauses the target media player |
 | "Next song" | Skips to next track on the target player |
 | "Set volume to 50%" | Adjusts target player volume |
 | "Shuffle" / "Repeat" | Handled by the target media player |
 
+The voice search works via HA's built-in `HassMediaSearchAndPlay` intent. The Navidrome entity declares `SEARCH_MEDIA` and `PLAY_MEDIA` features, which HA's intent system matches automatically.
+
 ## Development
-
-### Prerequisites
-
-- Home Assistant core source (for reference): `/path/to/core/`
-- Navidrome source (for API reference): `/path/to/navidrome/`
 
 ### Project Structure
 
@@ -95,39 +98,57 @@ With the media_player wrapper enabled and a voice pipeline configured (Wyoming S
 ha-music-assistant/
 ├── custom_components/
 │   └── navidrome/
-│       ├── __init__.py           # Setup, config entry lifecycle
-│       ├── api.py                # Async Subsonic API client (aiohttp)
-│       ├── config_flow.py        # Config flow: URL + credentials
-│       ├── const.py              # Domain, constants
-│       ├── media_source.py       # MediaSource: browse + search + resolve
-│       ├── media_player.py       # Voice support wrapper (optional)
-│       ├── manifest.json
-│       ├── strings.json
+│       ├── __init__.py           # Integration setup, config entry lifecycle
+│       ├── api.py                # Async Subsonic API client (aiohttp, no external deps)
+│       ├── config_flow.py        # Config flow: URL + credentials + reauth
+│       ├── const.py              # Domain, logger, constants
+│       ├── media_source.py       # MediaSource: browse library + resolve stream URLs
+│       ├── media_player.py       # Media player entity for voice search + play
+│       ├── manifest.json         # Integration manifest
+│       ├── strings.json          # UI strings
 │       └── translations/
-│           └── en.json
+│           └── en.json           # English translations
 ├── tests/
 │   └── components/
 │       └── navidrome/
-├── hacs.json
+│           ├── conftest.py       # Test fixtures, mock API client
+│           ├── test_api.py       # API client tests (auth, endpoints, errors)
+│           ├── test_config_flow.py  # Config flow tests
+│           └── test_media_source.py # Media source browse + resolve tests
+├── docs/
+│   └── PLAN.md                   # Implementation plan and API reference
+├── hacs.json                     # HACS configuration
 └── README.md
 ```
 
 ### Key Navidrome APIs Used
 
+All endpoints use the Subsonic REST API with token+salt authentication (`/rest/<endpoint>?u=...&t=...&s=...&f=json`).
+
 | Endpoint | Purpose |
 |---|---|
-| `ping` | Connection/auth validation |
-| `search3` | Full-text search (songs, albums, artists) |
-| `getArtists` | List all artists |
+| `ping` | Connection and auth validation |
+| `search3` | Full-text search across songs, albums, artists |
+| `getArtists` | List all artists (ID3 format) |
 | `getArtist` | Artist detail with albums |
 | `getAlbum` | Album detail with songs |
 | `getPlaylists` / `getPlaylist` | Playlist browsing |
 | `getGenres` | Genre listing |
-| `getAlbumList2` | Curated lists (newest, random, frequent, etc.) |
-| `stream` | Audio streaming URL |
-| `getCoverArt` | Album art URL |
+| `getAlbumList2` | Curated lists (newest, random, frequent, starred, byGenre, byYear) |
+| `stream` | Audio streaming (builds authenticated URL) |
+| `getCoverArt` | Album art thumbnails (builds authenticated URL) |
 
-All via Subsonic API with token+salt authentication.
+### Running Tests
+
+```bash
+pytest tests/components/navidrome/ -v
+```
+
+## Requirements
+
+- Home Assistant 2024.1.0 or later
+- Navidrome server with Subsonic API enabled (enabled by default)
+- A media player configured in HA (Sonos, Chromecast, MPD, etc.) for audio output
 
 ## License
 

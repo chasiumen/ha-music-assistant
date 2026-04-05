@@ -1,0 +1,10 @@
+{
+  "domain": "navidrome",
+  "name": "Navidrome",
+  "codeowners": ["@chasiumen"],
+  "config_flow": true,
+  "documentation": "https://github.com/chasiumen/ha-music-assistant",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "version": "0.1.0"
+}
