@@ -294,6 +294,32 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             LOGGER.warning("No playable tracks found for %s", media_id)
             return
 
+        LOGGER.info(
+            "Playing %d tracks on %s, first: %s",
+            len(tracks), target, tracks[0].get("title", "unknown"),
+        )
+
+        # Clear the target player's queue first to avoid conflicts
+        try:
+            await self.hass.services.async_call(
+                "media_player",
+                "media_stop",
+                {"entity_id": target},
+                blocking=True,
+            )
+        except Exception:
+            pass  # Player might already be stopped
+
+        try:
+            await self.hass.services.async_call(
+                "media_player",
+                "clear_playlist",
+                {"entity_id": target},
+                blocking=True,
+            )
+        except Exception:
+            pass  # Player might not support clear_playlist
+
         # Store queue in shared data for the sensor
         self.data.queue = tracks
         self.data.current_index = 0
@@ -302,7 +328,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         first = tracks[0]
         self._update_media_attributes(first)
 
-        # Play the first track with metadata
+        # Play the first track (replaces any remaining queue)
         play_data: dict[str, Any] = {
             "entity_id": target,
             "media_content_id": async_process_play_media_url(
@@ -353,6 +379,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
+        LOGGER.info("All %d tracks queued on %s", len(tracks), target)
 
     @property
     def entity_picture(self) -> str | None:
@@ -443,29 +470,58 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
     def _sync_queue_index(self, title: str, artist: str | None) -> None:
         """Update queue current_index based on the currently playing track."""
+        LOGGER.info("Sync queue: title=%s, artist=%s", title, artist)
+        found = False
         for i, track in enumerate(self.data.queue):
             if track.get("title") == title and (
                 not artist or track.get("artist") == artist
             ):
-                self.data.current_index = i
-                # Update cover art for the current track
-                cover_art = track.get("coverArt")
-                self._cover_art_url = (
-                    f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
-                )
-                # Scrobble if enabled
-                if self.scrobble_enabled and track.get("id"):
-                    self.hass.async_create_task(
-                        self._scrobble_track(track["id"])
+                if i != self.data.current_index:
+                    LOGGER.info("Queue advanced to index %d: %s", i, title)
+                    self.data.current_index = i
+                    # Update cover art for the current track
+                    cover_art = track.get("coverArt")
+                    self._cover_art_url = (
+                        f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
                     )
+                    # Scrobble if enabled
+                    if self.scrobble_enabled and track.get("id"):
+                        self.hass.async_create_task(
+                            self._scrobble_track(track["id"])
+                        )
+                found = True
                 break
+
+        if not found and title:
+            LOGGER.info("Track '%s' not found in queue, searching Navidrome", title)
+            # Track not in our queue — search Navidrome and scrobble if found
+            if self.scrobble_enabled:
+                self.hass.async_create_task(
+                    self._search_and_scrobble(title, artist)
+                )
+
+    async def _search_and_scrobble(self, title: str, artist: str | None) -> None:
+        """Search for a track by title and scrobble it."""
+        try:
+            query = f"{artist} {title}" if artist else title
+            results = await self.client.search3(query, song_count=1, album_count=0, artist_count=0)
+            songs = results.get("song", [])
+            if songs:
+                song_id = songs[0]["id"]
+                await self.client.scrobble(song_id, submission=False)
+                LOGGER.info("Scrobble sent (via search) for %s - %s", artist, title)
+            else:
+                LOGGER.info("Could not find track to scrobble: %s - %s", artist, title)
+        except Exception as err:
+            LOGGER.error("Failed to search and scrobble: %s", err)
 
     async def _scrobble_track(self, song_id: str) -> None:
         """Send scrobble for a track."""
         try:
             await self.client.scrobble(song_id, submission=False)
-        except Exception:
-            LOGGER.debug("Failed to scrobble now playing for %s", song_id)
+            LOGGER.info("Scrobble sent for song_id=%s", song_id)
+        except Exception as err:
+            LOGGER.error("Failed to scrobble for %s: %s", song_id, err)
 
     def _song_to_track(self, song: dict[str, Any]) -> dict[str, Any]:
         """Convert a Subsonic song/entry dict to a track dict."""
