@@ -7,7 +7,7 @@ from typing import Any
 
 from aiohttp import web
 
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
@@ -60,8 +60,42 @@ async def async_setup_entry(
     # Register cover art proxy view
     hass.http.register_view(NavidromeCoverArtView(data))
 
+    # Register custom queue card frontend resource
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(
+            url_path="/navidrome/navidrome-queue-card.js",
+            path=hass.config.path("custom_components/navidrome/www/navidrome-queue-card.js"),
+            cache_headers=True,
+        )]
+    )
+    # Add as Lovelace resource if not already added
+    await _register_card_resource(hass)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _register_card_resource(hass: HomeAssistant) -> None:
+    """Register the queue card as a Lovelace resource."""
+    url = "/navidrome/navidrome-queue-card.js"
+    # Use the lovelace resources collection if available
+    if "lovelace" not in hass.data:
+        return
+    try:
+        resources = hass.data["lovelace"].get("resources")
+        if resources is not None:
+            for res in resources.async_items():
+                if res.get("url") == url:
+                    return  # Already registered
+            await resources.async_create_item({"res_type": "module", "url": url})
+            LOGGER.info("Registered Navidrome queue card as Lovelace resource")
+    except Exception:
+        LOGGER.debug(
+            "Could not auto-register Lovelace resource. "
+            "Add manually: Settings > Dashboards > Resources > "
+            "URL: %s, Type: JavaScript Module",
+            url,
+        )
 
 
 async def async_unload_entry(
