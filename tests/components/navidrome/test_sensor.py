@@ -93,6 +93,7 @@ class TestNavidromeQueueSensor:
         assert len(tracks) == 3
 
         assert tracks[0]["index"] == 1
+        assert tracks[0]["song_id"] == "tr-1"
         assert tracks[0]["title"] == "Come Together"
         assert tracks[0]["artist"] == "The Beatles"
         assert tracks[0]["album"] == "Abbey Road"

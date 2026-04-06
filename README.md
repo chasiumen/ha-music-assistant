@@ -109,14 +109,15 @@ cards:
     max_visible: 10
 ```
 
-The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted, track duration, and a windowed view around the playing position.
+The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted. Click any track to play it. The list auto-scrolls to the current track.
 
 Card options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `entity` | (required) | Queue sensor entity ID |
-| `max_visible` | `10` | Number of tracks visible at once |
+| `player_entity` | (auto-detected) | Navidrome media player entity for click-to-play |
+| `max_height` | `400` | Maximum height in pixels (scrollable) |
 | `title` | `Queue` | Card header text |
 
 ### Voice Control (plays on target player)

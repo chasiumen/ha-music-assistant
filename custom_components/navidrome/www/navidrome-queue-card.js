@@ -10,24 +10,21 @@ class NavidromeQueueCard extends HTMLElement {
     }
     this._config = {
       entity: config.entity,
-      max_visible: config.max_visible || 10,
+      player_entity: config.player_entity || null,
+      max_height: config.max_height || 400,
       title: config.title || "Queue",
       ...config,
     };
   }
 
   getCardSize() {
-    return 3;
-  }
-
-  static getConfigElement() {
-    return document.createElement("navidrome-queue-card-editor");
+    return 4;
   }
 
   static getStubConfig() {
     return {
       entity: "sensor.navidrome_ryosukemorino_com_queue",
-      max_visible: 10,
+      max_height: 400,
     };
   }
 
@@ -43,17 +40,8 @@ class NavidromeQueueCard extends HTMLElement {
     const tracks = state.attributes.tracks || [];
     const total = state.attributes.total_tracks || 0;
     const currentIndex = state.attributes.current_index || 0;
-    const maxVisible = this._config.max_visible;
 
-    // Calculate window around current track
-    let startIdx = Math.max(0, currentIndex - 3);
-    let endIdx = Math.min(tracks.length, startIdx + maxVisible);
-    if (endIdx - startIdx < maxVisible) {
-      startIdx = Math.max(0, endIdx - maxVisible);
-    }
-    const visibleTracks = tracks.slice(startIdx, endIdx);
-
-    const trackRows = visibleTracks
+    const trackRows = tracks
       .map((track) => {
         const isCurrent = track.is_current;
         const mins = Math.floor((track.duration || 0) / 60);
@@ -61,20 +49,17 @@ class NavidromeQueueCard extends HTMLElement {
         const duration = track.duration ? `${mins}:${secs}` : "";
 
         return `
-        <div class="nq-track ${isCurrent ? "nq-current" : ""}">
+        <div class="nq-track ${isCurrent ? "nq-current" : ""}" data-index="${track.index}">
           <div class="nq-index">${isCurrent ? "▶" : track.index}</div>
           <div class="nq-info">
             <div class="nq-title">${track.title || "Unknown"}</div>
             <div class="nq-artist">${track.artist || "Unknown"}</div>
           </div>
           <div class="nq-duration">${duration}</div>
+          <div class="nq-play-btn" data-track-index="${track.index}" title="Play this track">▶</div>
         </div>`;
       })
       .join("");
-
-    const showBefore = startIdx > 0 ? `<div class="nq-more">↑ ${startIdx} more</div>` : "";
-    const remaining = tracks.length - endIdx;
-    const showAfter = remaining > 0 ? `<div class="nq-more">↓ ${remaining} more</div>` : "";
 
     this.innerHTML = `
       <ha-card>
@@ -83,9 +68,7 @@ class NavidromeQueueCard extends HTMLElement {
           <span class="nq-count">${currentIndex}/${total}</span>
         </div>
         <div class="nq-list">
-          ${showBefore}
           ${trackRows || '<div class="nq-empty">No tracks in queue</div>'}
-          ${showAfter}
         </div>
       </ha-card>
       <style>
@@ -105,16 +88,23 @@ class NavidromeQueueCard extends HTMLElement {
         }
         .nq-list {
           padding: 4px 0 8px;
+          max-height: ${this._config.max_height}px;
+          overflow-y: auto;
+          scroll-behavior: smooth;
         }
         .nq-track {
           display: flex;
           align-items: center;
           padding: 6px 16px;
           gap: 12px;
+          cursor: pointer;
           transition: background 0.2s;
         }
         .nq-track:hover {
           background: var(--secondary-background-color);
+        }
+        .nq-track:hover .nq-play-btn {
+          opacity: 1;
         }
         .nq-current {
           background: var(--primary-color);
@@ -168,19 +158,93 @@ class NavidromeQueueCard extends HTMLElement {
         .nq-current .nq-duration {
           opacity: 0.9;
         }
-        .nq-more {
+        .nq-play-btn {
+          opacity: 0;
+          font-size: 0.75em;
+          padding: 4px 8px;
+          border-radius: 50%;
+          background: var(--primary-color);
+          color: var(--text-primary-color);
+          cursor: pointer;
+          transition: opacity 0.2s;
+          min-width: 24px;
           text-align: center;
-          font-size: 0.8em;
-          opacity: 0.5;
-          padding: 4px;
+        }
+        .nq-current .nq-play-btn {
+          display: none;
         }
         .nq-empty {
           text-align: center;
           padding: 16px;
           opacity: 0.5;
         }
+        /* Scrollbar styling */
+        .nq-list::-webkit-scrollbar {
+          width: 6px;
+        }
+        .nq-list::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .nq-list::-webkit-scrollbar-thumb {
+          background: var(--divider-color, #ccc);
+          border-radius: 3px;
+        }
+        .nq-list::-webkit-scrollbar-thumb:hover {
+          background: var(--secondary-text-color, #999);
+        }
       </style>
     `;
+
+    // Scroll current track into view
+    requestAnimationFrame(() => {
+      const current = this.querySelector(".nq-current");
+      if (current) {
+        current.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    });
+
+    // Add click handlers for play buttons
+    this.querySelectorAll(".nq-play-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const trackIndex = parseInt(btn.dataset.trackIndex) - 1;
+        this._playTrack(trackIndex);
+      });
+    });
+
+    // Add click handler for track rows
+    this.querySelectorAll(".nq-track:not(.nq-current)").forEach((row) => {
+      row.addEventListener("click", () => {
+        const trackIndex = parseInt(row.dataset.index) - 1;
+        this._playTrack(trackIndex);
+      });
+    });
+  }
+
+  _playTrack(index) {
+    if (!this._hass || !this._config) return;
+
+    const state = this._hass.states[this._config.entity];
+    if (!state) return;
+
+    const tracks = state.attributes.tracks || [];
+    if (index < 0 || index >= tracks.length) return;
+
+    // Find the navidrome media_player entity to send play_media
+    // Derive from the sensor entity name
+    const sensorId = this._config.entity;
+    const playerEntity =
+      this._config.player_entity ||
+      sensorId.replace("sensor.", "media_player.").replace("_queue", "");
+
+    const track = tracks[index];
+    if (!track.song_id) return;
+
+    this._hass.callService("media_player", "play_media", {
+      entity_id: playerEntity,
+      media_content_id: `media-source://navidrome/song/${track.song_id}`,
+      media_content_type: "music",
+    });
   }
 }
 
@@ -190,5 +254,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "navidrome-queue-card",
   name: "Navidrome Queue",
-  description: "Shows the current Navidrome playback queue",
+  description: "Shows the current Navidrome playback queue with scrolling and click-to-play",
 });

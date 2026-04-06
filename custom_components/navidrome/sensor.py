@@ -67,6 +67,7 @@ class NavidromeQueueSensor(SensorEntity):
         for i, track in enumerate(self.data.queue):
             tracks.append({
                 "index": i + 1,
+                "song_id": track.get("id"),
                 "title": track.get("title", "Unknown"),
                 "artist": track.get("artist", "Unknown"),
                 "album": track.get("album", ""),
