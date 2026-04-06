@@ -25,7 +25,9 @@ Since HA already has media players that handle playback, our integration is a **
 | `api.py` | Async Subsonic API client (aiohttp, no external deps) |
 | `config_flow.py` | UI setup: URL + username + password + SSL option. Options flow for target player. |
 | `media_source.py` | Browse library, resolve to stream URLs. Used by Media sidebar. |
-| `media_player.py` | Voice search+play entity. Forwards playback to a configured target media player. |
+| `media_player.py` | Voice search+play entity. Forwards playback, proxies controls, tracks queue. |
+| `sensor.py` | Queue sensor exposing current playlist as track list attribute. |
+| `__init__.py` | Setup, NavidromeData shared state, cover art proxy HTTP view. |
 
 ### Two Playback Paths
 
