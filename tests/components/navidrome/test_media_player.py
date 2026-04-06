@@ -352,6 +352,60 @@ class TestPlaybackControls:
         player.hass.services.async_call.assert_not_called()
 
 
+class TestSyncQueueIndex:
+    """Test queue index syncing from target player."""
+
+    def test_sync_finds_matching_track(self) -> None:
+        """Test _sync_queue_index matches by title and artist."""
+        player = _make_player(scrobble_enabled=False)
+        player.data.queue = [
+            {"title": "Track A", "artist": "Artist 1", "coverArt": "ca-1", "id": "t1"},
+            {"title": "Track B", "artist": "Artist 2", "coverArt": "ca-2", "id": "t2"},
+            {"title": "Track C", "artist": "Artist 1", "coverArt": "ca-3", "id": "t3"},
+        ]
+        player.data.current_index = 0
+
+        player._sync_queue_index("Track B", "Artist 2")
+
+        assert player.data.current_index == 1
+        assert player._cover_art_url == "/api/navidrome/cover_art/ca-2"
+
+    def test_sync_no_match_keeps_index(self) -> None:
+        """Test _sync_queue_index does nothing when no match."""
+        player = _make_player(scrobble_enabled=False)
+        player.data.queue = [
+            {"title": "Track A", "artist": "Artist 1", "id": "t1"},
+        ]
+        player.data.current_index = 0
+
+        player._sync_queue_index("Unknown Track", "Unknown Artist")
+
+        assert player.data.current_index == 0
+
+    def test_sync_empty_queue(self) -> None:
+        """Test _sync_queue_index with empty queue."""
+        player = _make_player(scrobble_enabled=False)
+        player.data.queue = []
+        player.data.current_index = 0
+
+        player._sync_queue_index("Track A", "Artist 1")
+
+        assert player.data.current_index == 0
+
+    def test_sync_title_only_no_artist(self) -> None:
+        """Test _sync_queue_index matches by title when artist is None."""
+        player = _make_player(scrobble_enabled=False)
+        player.data.queue = [
+            {"title": "Track A", "artist": "Artist 1", "coverArt": "ca-1", "id": "t1"},
+            {"title": "Track B", "artist": "Artist 2", "coverArt": "ca-2", "id": "t2"},
+        ]
+        player.data.current_index = 0
+
+        player._sync_queue_index("Track B", None)
+
+        assert player.data.current_index == 1
+
+
 class TestSupportedFeatures:
     """Test supported features declaration."""
 
