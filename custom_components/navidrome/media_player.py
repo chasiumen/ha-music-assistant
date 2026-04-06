@@ -169,30 +169,84 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             )
             return
 
-        # Resolve media-source:// URIs to actual stream URLs
-        if media_source.is_media_source_id(media_id):
-            play_item = await media_source.async_resolve_media(
-                self.hass, media_id, self.entity_id
-            )
-            media_id = play_item.url
-            media_type = play_item.mime_type
+        # Collect all stream URLs to play
+        stream_urls = await self._resolve_to_stream_urls(media_id)
 
-        # Forward to the target media player
+        if not stream_urls:
+            LOGGER.warning("No playable tracks found for %s", media_id)
+            return
+
+        # Play the first track
         await self.hass.services.async_call(
             "media_player",
             SERVICE_PLAY_MEDIA,
             {
                 "entity_id": target,
                 "media_content_id": async_process_play_media_url(
-                    self.hass, media_id
+                    self.hass, stream_urls[0]
                 ),
-                "media_content_type": media_type,
+                "media_content_type": "audio/mpeg",
             },
             blocking=True,
         )
 
+        # Enqueue remaining tracks
+        for url in stream_urls[1:]:
+            await self.hass.services.async_call(
+                "media_player",
+                SERVICE_PLAY_MEDIA,
+                {
+                    "entity_id": target,
+                    "media_content_id": async_process_play_media_url(
+                        self.hass, url
+                    ),
+                    "media_content_type": "audio/mpeg",
+                    "enqueue": "add",
+                },
+                blocking=True,
+            )
+
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
+
+    async def _resolve_to_stream_urls(self, media_id: str) -> list[str]:
+        """Resolve a media ID to a list of stream URLs."""
+        # Direct stream URL (single song from search results)
+        if not media_source.is_media_source_id(media_id):
+            return [media_id]
+
+        # Parse the media-source URI to get type and ID
+        # Format: media-source://navidrome/{type}/{id}
+        uri = media_id.replace("media-source://navidrome/", "")
+        parts = uri.split("/", 1)
+        if len(parts) != 2:
+            # Single song or unknown — fall back to resolve_media
+            play_item = await media_source.async_resolve_media(
+                self.hass, media_id, self.entity_id
+            )
+            return [play_item.url]
+
+        item_type, item_id = parts
+
+        if item_type == "song":
+            return [self.client.stream_url(item_id)]
+
+        if item_type == "album":
+            album = await self.client.get_album(item_id)
+            songs = album.get("song", [])
+            songs.sort(key=lambda s: (s.get("discNumber", 0), s.get("track", 0)))
+            return [self.client.stream_url(s["id"]) for s in songs]
+
+        if item_type == "playlist":
+            playlist = await self.client.get_playlist(item_id)
+            entries = playlist.get("entry", [])
+            return [self.client.stream_url(e["id"]) for e in entries]
+
+        # Unknown type — try single resolve
+        play_item = await media_source.async_resolve_media(
+            self.hass, media_id, self.entity_id
+        )
+        return [play_item.url]
 
     async def async_browse_media(
         self,
