@@ -6,5 +6,5 @@
   "documentation": "https://github.com/chasiumen/ha-music-assistant",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "0.4.1"
+  "version": "0.5.0"
 }
