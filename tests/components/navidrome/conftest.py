@@ -145,6 +145,19 @@ MOCK_PLAYLIST_DETAIL = {
     ],
 }
 
+MOCK_SONG = {
+    "id": "tr-1",
+    "title": "Come Together",
+    "artist": "The Beatles",
+    "album": "Abbey Road",
+    "albumId": "al-1",
+    "coverArt": "al-1",
+    "duration": 259,
+    "contentType": "audio/mpeg",
+    "suffix": "mp3",
+    "track": 1,
+}
+
 MOCK_GENRES = [
     {"value": "Rock", "songCount": 100, "albumCount": 20},
     {"value": "Jazz", "songCount": 50, "albumCount": 10},
@@ -172,11 +185,13 @@ def mock_navidrome_client() -> Generator[MagicMock]:
         client.search3 = AsyncMock(return_value=MOCK_SEARCH_RESULTS)
         client.get_artists = AsyncMock(return_value=MOCK_ARTISTS)
         client.get_artist = AsyncMock(return_value=MOCK_ARTIST_DETAIL)
+        client.get_song = AsyncMock(return_value=MOCK_SONG)
         client.get_album = AsyncMock(return_value=MOCK_ALBUM_DETAIL)
         client.get_playlists = AsyncMock(return_value=MOCK_PLAYLISTS)
         client.get_playlist = AsyncMock(return_value=MOCK_PLAYLIST_DETAIL)
         client.get_genres = AsyncMock(return_value=MOCK_GENRES)
         client.get_album_list2 = AsyncMock(return_value=MOCK_ALBUM_LIST)
+        client.scrobble = AsyncMock(return_value=None)
         client.stream_url = MagicMock(
             side_effect=lambda song_id: f"http://navidrome.local:4533/rest/stream?id={song_id}"
         )

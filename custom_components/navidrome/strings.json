@@ -39,10 +39,12 @@
         "title": "Navidrome Options",
         "description": "Configure playback settings.",
         "data": {
-          "target_player": "Target media player"
+          "target_player": "Target media player",
+          "scrobble_enabled": "Enable scrobbling"
         },
         "data_description": {
-          "target_player": "The media player that will play audio from Navidrome (e.g., a Sonos speaker, Chromecast, or browser player)"
+          "target_player": "The media player that will play audio from Navidrome (e.g., a Sonos speaker, Chromecast, or browser player)",
+          "scrobble_enabled": "Send 'now playing' status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins."
         }
       }
     }

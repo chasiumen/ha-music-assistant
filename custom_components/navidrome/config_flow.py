@@ -21,7 +21,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
-from .const import CONF_TARGET_PLAYER, DOMAIN
+from .const import CONF_SCROBBLE_ENABLED, CONF_TARGET_PLAYER, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -178,6 +178,10 @@ class NavidromeOptionsFlow(OptionsFlow):
                         domain="media_player",
                     )
                 ),
+                vol.Optional(
+                    CONF_SCROBBLE_ENABLED,
+                    default=self.config_entry.options.get(CONF_SCROBBLE_ENABLED, False),
+                ): bool,
             }
         )
 

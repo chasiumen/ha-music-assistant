@@ -160,6 +160,45 @@ class TestNavidromeClient:
         assert result[0]["name"] == "The Beatles"
         assert result[1]["name"] == "Pink Floyd"
 
+    async def test_get_song(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test getSong endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "song": {
+                        "id": "tr-1",
+                        "title": "Come Together",
+                        "artist": "The Beatles",
+                        "album": "Abbey Road",
+                        "coverArt": "al-1",
+                        "duration": 259,
+                    },
+                }
+            }
+        )
+        result = await client.get_song("tr-1")
+        assert result["title"] == "Come Together"
+        assert result["artist"] == "The Beatles"
+        assert result["duration"] == 259
+
+    async def test_scrobble(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test scrobble endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {"subsonic-response": {"status": "ok"}}
+        )
+        await client.scrobble("tr-1", submission=False)
+        # Verify the request was made
+        mock_session.get.assert_called_once()
+        call_kwargs = mock_session.get.call_args
+        params = call_kwargs.kwargs.get("params") or call_kwargs[1].get("params", {})
+        assert params.get("id") == "tr-1"
+        assert params.get("submission") == "false"
+
     def test_stream_url(self, client: NavidromeClient) -> None:
         """Test stream URL building."""
         url = client.stream_url("tr-123")

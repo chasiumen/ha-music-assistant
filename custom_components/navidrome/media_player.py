@@ -30,7 +30,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavidromeConfigEntry
 from .api import NavidromeClient
-from .const import CONF_TARGET_PLAYER, DOMAIN, LOGGER
+from .const import CONF_SCROBBLE_ENABLED, CONF_TARGET_PLAYER, DOMAIN, LOGGER
 
 SERVICE_PLAY_MEDIA = "play_media"
 
@@ -61,6 +61,13 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         | MediaPlayerEntityFeature.BROWSE_MEDIA
     )
     _attr_state = MediaPlayerState.IDLE
+    _attr_media_content_id: str | None = None
+    _attr_media_content_type: str | None = None
+    _attr_media_title: str | None = None
+    _attr_media_artist: str | None = None
+    _attr_media_album_name: str | None = None
+    _attr_media_image_url: str | None = None
+    _attr_media_duration: int | None = None
 
     def __init__(self, entry: NavidromeConfigEntry) -> None:
         """Initialize the media player."""
@@ -83,6 +90,11 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     def target_player(self) -> str | None:
         """Return the configured target media player entity ID."""
         return self._entry.options.get(CONF_TARGET_PLAYER)
+
+    @property
+    def scrobble_enabled(self) -> bool:
+        """Return whether scrobbling is enabled."""
+        return self._entry.options.get(CONF_SCROBBLE_ENABLED, False)
 
     async def async_search_media(
         self,
@@ -169,12 +181,16 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             )
             return
 
-        # Collect all stream URLs to play
-        stream_urls = await self._resolve_to_stream_urls(media_id)
+        # Collect all tracks to play
+        tracks = await self._resolve_to_tracks(media_id)
 
-        if not stream_urls:
+        if not tracks:
             LOGGER.warning("No playable tracks found for %s", media_id)
             return
+
+        # Update entity metadata from the first track
+        first = tracks[0]
+        self._update_media_attributes(first)
 
         # Play the first track
         await self.hass.services.async_call(
@@ -183,22 +199,29 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             {
                 "entity_id": target,
                 "media_content_id": async_process_play_media_url(
-                    self.hass, stream_urls[0]
+                    self.hass, first["url"]
                 ),
                 "media_content_type": "audio/mpeg",
             },
             blocking=True,
         )
 
+        # Scrobble "now playing" for the first track
+        if self.scrobble_enabled and first.get("id"):
+            try:
+                await self.client.scrobble(first["id"], submission=False)
+            except Exception:
+                LOGGER.debug("Failed to scrobble now playing for %s", first["id"])
+
         # Enqueue remaining tracks
-        for url in stream_urls[1:]:
+        for track in tracks[1:]:
             await self.hass.services.async_call(
                 "media_player",
                 SERVICE_PLAY_MEDIA,
                 {
                     "entity_id": target,
                     "media_content_id": async_process_play_media_url(
-                        self.hass, url
+                        self.hass, track["url"]
                     ),
                     "media_content_type": "audio/mpeg",
                     "enqueue": "add",
@@ -209,44 +232,111 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
 
-    async def _resolve_to_stream_urls(self, media_id: str) -> list[str]:
-        """Resolve a media ID to a list of stream URLs."""
+    def _update_media_attributes(self, track: dict[str, Any]) -> None:
+        """Update entity media attributes from a track dict."""
+        self._attr_media_content_id = track.get("url")
+        self._attr_media_content_type = "audio/mpeg"
+        self._attr_media_title = track.get("title")
+        self._attr_media_artist = track.get("artist")
+        self._attr_media_album_name = track.get("album")
+        self._attr_media_duration = track.get("duration")
+        cover_art = track.get("coverArt")
+        self._attr_media_image_url = (
+            self.client.cover_art_url(cover_art) if cover_art else None
+        )
+
+    async def _resolve_to_tracks(self, media_id: str) -> list[dict[str, Any]]:
+        """Resolve a media ID to a list of track dicts.
+
+        Each dict has: id, url, title, artist, album, duration, coverArt
+        """
         # Direct stream URL (single song from search results)
         if not media_source.is_media_source_id(media_id):
-            return [media_id]
+            song_id = self._extract_song_id_from_url(media_id)
+            track: dict[str, Any] = {"id": song_id, "url": media_id}
+            # Fetch metadata if we have a song ID
+            if song_id:
+                try:
+                    song = await self.client.get_song(song_id)
+                    track.update({
+                        "title": song.get("title"),
+                        "artist": song.get("artist"),
+                        "album": song.get("album"),
+                        "duration": song.get("duration"),
+                        "coverArt": song.get("coverArt"),
+                    })
+                except Exception:
+                    LOGGER.debug("Failed to fetch metadata for %s", song_id)
+            return [track]
 
         # Parse the media-source URI to get type and ID
         # Format: media-source://navidrome/{type}/{id}
         uri = media_id.replace("media-source://navidrome/", "")
         parts = uri.split("/", 1)
         if len(parts) != 2:
-            # Single song or unknown — fall back to resolve_media
             play_item = await media_source.async_resolve_media(
                 self.hass, media_id, self.entity_id
             )
-            return [play_item.url]
+            return [{"id": None, "url": play_item.url}]
 
         item_type, item_id = parts
 
         if item_type == "song":
-            return [self.client.stream_url(item_id)]
+            track = {"id": item_id, "url": self.client.stream_url(item_id)}
+            try:
+                song = await self.client.get_song(item_id)
+                track.update({
+                    "title": song.get("title"),
+                    "artist": song.get("artist"),
+                    "album": song.get("album"),
+                    "duration": song.get("duration"),
+                    "coverArt": song.get("coverArt"),
+                })
+            except Exception:
+                LOGGER.debug("Failed to fetch metadata for %s", item_id)
+            return [track]
 
         if item_type == "album":
             album = await self.client.get_album(item_id)
             songs = album.get("song", [])
             songs.sort(key=lambda s: (s.get("discNumber", 0), s.get("track", 0)))
-            return [self.client.stream_url(s["id"]) for s in songs]
+            return [self._song_to_track(s) for s in songs]
 
         if item_type == "playlist":
             playlist = await self.client.get_playlist(item_id)
             entries = playlist.get("entry", [])
-            return [self.client.stream_url(e["id"]) for e in entries]
+            return [self._song_to_track(e) for e in entries]
 
         # Unknown type — try single resolve
         play_item = await media_source.async_resolve_media(
             self.hass, media_id, self.entity_id
         )
-        return [play_item.url]
+        return [{"id": None, "url": play_item.url}]
+
+    def _song_to_track(self, song: dict[str, Any]) -> dict[str, Any]:
+        """Convert a Subsonic song/entry dict to a track dict."""
+        return {
+            "id": song["id"],
+            "url": self.client.stream_url(song["id"]),
+            "title": song.get("title"),
+            "artist": song.get("artist"),
+            "album": song.get("album"),
+            "duration": song.get("duration"),
+            "coverArt": song.get("coverArt"),
+        }
+
+    @staticmethod
+    def _extract_song_id_from_url(url: str) -> str | None:
+        """Extract the song ID from a Navidrome stream URL."""
+        from urllib.parse import parse_qs, urlparse
+
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            ids = params.get("id", [])
+            return ids[0] if ids else None
+        except Exception:
+            return None
 
     async def async_browse_media(
         self,
