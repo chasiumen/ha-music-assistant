@@ -37,6 +37,8 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 - Queue sensor with track list for dashboard display
 - Playback controls (play/pause/stop/next/prev/volume) proxied to target player
 - Cover art served via local proxy (avoids SSL issues with self-signed certs)
+- Queue persists across HA restarts
+- Clear queue service (`navidrome.clear_queue`) and card button
 - Optional scrobbling — sends "now playing" to Navidrome for Discord status, Last.fm, etc.
 - Re-authentication flow when credentials change
 - Subsonic API token+salt authentication (passwords never sent in plaintext)
@@ -162,7 +164,8 @@ ha-music-assistant/
 │           ├── test_config_flow.py  # Config flow tests
 │           ├── test_media_source.py # Media source browse + resolve tests
 │           ├── test_media_player.py # Media player controls, queue, scrobble tests
-│           └── test_sensor.py       # Queue sensor tests
+│           ├── test_sensor.py       # Queue sensor tests
+│           └── test_queue_persistence.py # Queue save/load/clear tests
 ├── docs/
 │   └── PLAN.md                   # Implementation plan and API reference
 ├── hacs.json                     # HACS configuration

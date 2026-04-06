@@ -480,6 +480,38 @@ class TestPlayFromQueueIndex:
         assert player._attr_media_artist == "Y"
 
 
+class TestSearchAndScrobble:
+    """Test _search_and_scrobble method."""
+
+    async def test_search_and_scrobble_success(self) -> None:
+        """Test searching for a track and scrobbling it."""
+        player = _make_player(scrobble_enabled=True)
+        player.client.search3 = AsyncMock(return_value={
+            "song": [{"id": "tr-found", "title": "Found Track"}],
+        })
+        await player._search_and_scrobble("Found Track", "Some Artist")
+
+        player.client.search3.assert_called_once()
+        player.client.scrobble.assert_called_once_with("tr-found", submission=False)
+
+    async def test_search_and_scrobble_not_found(self) -> None:
+        """Test when search returns no results."""
+        player = _make_player(scrobble_enabled=True)
+        player.client.search3 = AsyncMock(return_value={"song": []})
+
+        await player._search_and_scrobble("Unknown", "Nobody")
+
+        player.client.scrobble.assert_not_called()
+
+    async def test_search_and_scrobble_error(self) -> None:
+        """Test search_and_scrobble handles errors."""
+        player = _make_player(scrobble_enabled=True)
+        player.client.search3 = AsyncMock(side_effect=Exception("Network error"))
+
+        # Should not raise
+        await player._search_and_scrobble("Track", "Artist")
+
+
 class TestSearchMedia:
     """Test search_media functionality."""
 
