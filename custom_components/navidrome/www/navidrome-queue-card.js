@@ -65,7 +65,10 @@ class NavidromeQueueCard extends HTMLElement {
       <ha-card>
         <div class="nq-header">
           <span class="nq-title-text">${this._config.title}</span>
-          <span class="nq-count">${currentIndex}/${total}</span>
+          <div class="nq-header-right">
+            <span class="nq-count">${currentIndex}/${total}</span>
+            <span class="nq-clear-btn" title="Clear queue">🗑</span>
+          </div>
         </div>
         <div class="nq-list">
           ${trackRows || '<div class="nq-empty">No tracks in queue</div>'}
@@ -82,9 +85,24 @@ class NavidromeQueueCard extends HTMLElement {
           font-size: 1.1em;
           font-weight: 500;
         }
+        .nq-header-right {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
         .nq-count {
           font-size: 0.85em;
           opacity: 0.7;
+        }
+        .nq-clear-btn {
+          cursor: pointer;
+          font-size: 0.9em;
+          opacity: 0.5;
+          transition: opacity 0.2s;
+          padding: 2px 4px;
+        }
+        .nq-clear-btn:hover {
+          opacity: 1;
         }
         .nq-list {
           padding: 4px 0 8px;
@@ -219,6 +237,15 @@ class NavidromeQueueCard extends HTMLElement {
         this._playTrack(trackIndex);
       });
     });
+
+    // Clear queue button
+    const clearBtn = this.querySelector(".nq-clear-btn");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._clearQueue();
+      });
+    }
   }
 
   _playTrack(index) {
@@ -245,6 +272,11 @@ class NavidromeQueueCard extends HTMLElement {
       media_content_id: `media-source://navidrome/song/${track.song_id}`,
       media_content_type: "music",
     });
+  }
+
+  _clearQueue() {
+    if (!this._hass) return;
+    this._hass.callService("navidrome", "clear_queue", {});
   }
 }
 

@@ -1,0 +1,3 @@
+clear_queue:
+  name: Clear Queue
+  description: Clear the Navidrome playback queue and stop the target player.

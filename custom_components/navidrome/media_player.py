@@ -330,6 +330,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         # Store queue in shared data for the sensor
         self.data.queue = tracks
         self.data.current_index = 0
+        self.hass.async_create_task(self.data.save_queue())
 
         # Update entity metadata from the first track
         first = tracks[0]
@@ -506,6 +507,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         # Update current index
         self.data.current_index = index
+        self.hass.async_create_task(self.data.save_queue())
         first = tracks[index]
         self._update_media_attributes(first)
 
@@ -577,6 +579,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 if i != self.data.current_index:
                     LOGGER.info("Queue advanced to index %d: %s", i, title)
                     self.data.current_index = i
+                    self.hass.async_create_task(self.data.save_queue())
                     # Update cover art for the current track
                     cover_art = track.get("coverArt")
                     self._cover_art_url = (

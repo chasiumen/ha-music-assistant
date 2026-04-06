@@ -5,17 +5,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import voluptuous as vol
 from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
 from .const import DOMAIN, LOGGER
+
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}_queue"
 
 
 @dataclass
@@ -23,8 +28,33 @@ class NavidromeData:
     """Shared data for the Navidrome integration."""
 
     client: NavidromeClient
+    store: Store | None = None
     queue: list[dict[str, Any]] = field(default_factory=list)
     current_index: int = 0
+
+    async def save_queue(self) -> None:
+        """Persist queue to disk."""
+        if self.store:
+            await self.store.async_save({
+                "queue": self.queue,
+                "current_index": self.current_index,
+            })
+
+    async def load_queue(self) -> None:
+        """Restore queue from disk."""
+        if not self.store:
+            return
+        data = await self.store.async_load()
+        if data:
+            self.queue = data.get("queue", [])
+            self.current_index = data.get("current_index", 0)
+            LOGGER.info("Restored queue: %d tracks, index %d", len(self.queue), self.current_index)
+
+    async def clear_queue(self) -> None:
+        """Clear the queue and persist."""
+        self.queue = []
+        self.current_index = 0
+        await self.save_queue()
 
 
 type NavidromeConfigEntry = ConfigEntry[NavidromeData]
@@ -54,7 +84,13 @@ async def async_setup_entry(
             f"Cannot connect to Navidrome server: {err}"
         ) from err
 
-    data = NavidromeData(client=client)
+    # Create shared data with persistent storage
+    store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}_{entry.entry_id}")
+    data = NavidromeData(client=client, store=store)
+
+    # Restore queue from disk
+    await data.load_queue()
+
     entry.runtime_data = data
 
     # Register cover art proxy view
@@ -68,29 +104,53 @@ async def async_setup_entry(
             cache_headers=True,
         )]
     )
-    # Register JS module with HA frontend so the card loads automatically
     from homeassistant.components.frontend import add_extra_js_url
     add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js")
 
+    # Register clear_queue service
+    async def handle_clear_queue(call: ServiceCall) -> None:
+        """Handle clear_queue service call."""
+        await data.clear_queue()
+        # Also clear the target player
+        target = entry.options.get("target_player")
+        if target:
+            try:
+                await hass.services.async_call(
+                    "media_player", "media_stop",
+                    {"entity_id": target}, blocking=True,
+                )
+            except Exception:
+                pass
+            try:
+                await hass.services.async_call(
+                    "media_player", "clear_playlist",
+                    {"entity_id": target}, blocking=True,
+                )
+            except Exception:
+                pass
+        LOGGER.info("Queue cleared")
+
+    if not hass.services.has_service(DOMAIN, "clear_queue"):
+        hass.services.async_register(
+            DOMAIN, "clear_queue", handle_clear_queue, schema=vol.Schema({})
+        )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
 
 
 async def async_unload_entry(
     hass: HomeAssistant, entry: NavidromeConfigEntry
 ) -> bool:
     """Unload a config entry."""
+    # Save queue before unloading
+    await entry.runtime_data.save_queue()
+    hass.services.async_remove(DOMAIN, "clear_queue")
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 class NavidromeCoverArtView(HomeAssistantView):
-    """Proxy cover art requests through HA to avoid SSL issues.
-
-    The browser can't fetch cover art directly from Navidrome when using
-    self-signed certs. This view fetches it server-side using our
-    SSL-disabled aiohttp session and serves it to the frontend.
-    """
+    """Proxy cover art requests through HA to avoid SSL issues."""
 
     url = "/api/navidrome/cover_art/{item_id}"
     name = "api:navidrome:cover_art"
