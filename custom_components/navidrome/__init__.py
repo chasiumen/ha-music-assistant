@@ -68,34 +68,13 @@ async def async_setup_entry(
             cache_headers=True,
         )]
     )
-    # Add as Lovelace resource if not already added
-    await _register_card_resource(hass)
+    # Register JS module with HA frontend so the card loads automatically
+    from homeassistant.components.frontend import add_extra_js_url
+    add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js")
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
-
-async def _register_card_resource(hass: HomeAssistant) -> None:
-    """Register the queue card as a Lovelace resource."""
-    url = "/navidrome/navidrome-queue-card.js"
-    # Use the lovelace resources collection if available
-    if "lovelace" not in hass.data:
-        return
-    try:
-        resources = hass.data["lovelace"].get("resources")
-        if resources is not None:
-            for res in resources.async_items():
-                if res.get("url") == url:
-                    return  # Already registered
-            await resources.async_create_item({"res_type": "module", "url": url})
-            LOGGER.info("Registered Navidrome queue card as Lovelace resource")
-    except Exception:
-        LOGGER.debug(
-            "Could not auto-register Lovelace resource. "
-            "Add manually: Settings > Dashboards > Resources > "
-            "URL: %s, Type: JavaScript Module",
-            url,
-        )
 
 
 async def async_unload_entry(
