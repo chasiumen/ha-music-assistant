@@ -106,10 +106,12 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         @callback
         def _handle_target_state_change(event: Event) -> None:
-            """Sync state from target player."""
+            """Sync state and media metadata from target player."""
             new_state = event.data.get("new_state")
             if not new_state:
                 return
+
+            # Sync playback state
             state = new_state.state
             if state == STATE_PLAYING:
                 self._attr_state = MediaPlayerState.PLAYING
@@ -117,6 +119,22 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 self._attr_state = MediaPlayerState.PAUSED
             else:
                 self._attr_state = MediaPlayerState.IDLE
+
+            # Sync media metadata from target player
+            attrs = new_state.attributes
+            target_title = attrs.get("media_title")
+            target_artist = attrs.get("media_artist")
+            target_duration = attrs.get("media_duration")
+
+            if target_title:
+                self._attr_media_title = target_title
+                self._attr_media_artist = target_artist
+                self._attr_media_duration = target_duration
+                self._attr_media_album_name = attrs.get("media_album_name")
+
+                # Update queue current_index to match the playing track
+                self._sync_queue_index(target_title, target_artist)
+
             self.async_write_ha_state()
 
         self._unsub_state_listener = async_track_state_change_event(
@@ -419,6 +437,32 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             self.hass, media_id, self.entity_id
         )
         return [{"id": None, "url": play_item.url}]
+
+    def _sync_queue_index(self, title: str, artist: str | None) -> None:
+        """Update queue current_index based on the currently playing track."""
+        for i, track in enumerate(self.data.queue):
+            if track.get("title") == title and (
+                not artist or track.get("artist") == artist
+            ):
+                self.data.current_index = i
+                # Update cover art for the current track
+                cover_art = track.get("coverArt")
+                self._cover_art_url = (
+                    f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
+                )
+                # Scrobble if enabled
+                if self.scrobble_enabled and track.get("id"):
+                    self.hass.async_create_task(
+                        self._scrobble_track(track["id"])
+                    )
+                break
+
+    async def _scrobble_track(self, song_id: str) -> None:
+        """Send scrobble for a track."""
+        try:
+            await self.client.scrobble(song_id, submission=False)
+        except Exception:
+            LOGGER.debug("Failed to scrobble now playing for %s", song_id)
 
     def _song_to_track(self, song: dict[str, Any]) -> dict[str, Any]:
         """Convert a Subsonic song/entry dict to a track dict."""

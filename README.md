@@ -97,22 +97,27 @@ Select a song, then choose which player to use — **"This Browser"** for local 
 
 Add the `media_player.navidrome` entity to your dashboard. When you browse and play from the dashboard card, audio is sent to the **target media player** you configured in the integration options.
 
-Recommended dashboard setup using a vertical stack:
+Recommended dashboard setup with the built-in queue card:
 
 ```yaml
 type: vertical-stack
 cards:
   - type: media-control
     entity: media_player.navidrome_ryosukemorino_com
-  - type: markdown
-    content: |
-      ## Queue ({{ state_attr('sensor.navidrome_ryosukemorino_com_queue', 'total_tracks') }} tracks)
-      {% for track in state_attr('sensor.navidrome_ryosukemorino_com_queue', 'tracks') %}
-      {{ '▶️' if track.is_current else '&nbsp;&nbsp;&nbsp;' }} {{ loop.index }}. **{{ track.artist }}** - {{ track.title }}
-      {% endfor %}
+  - type: custom:navidrome-queue-card
+    entity: sensor.navidrome_ryosukemorino_com_queue
+    max_visible: 10
 ```
 
-The queue sensor (`sensor.navidrome_*_queue`) automatically updates when playback starts.
+The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted, track duration, and a windowed view around the playing position.
+
+Card options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `entity` | (required) | Queue sensor entity ID |
+| `max_visible` | `10` | Number of tracks visible at once |
+| `title` | `Queue` | Card header text |
 
 ### Voice Control (plays on target player)
 
