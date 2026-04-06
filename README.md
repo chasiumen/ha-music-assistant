@@ -32,6 +32,9 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 - Stream audio to any HA media player
 - Album art thumbnails in the media browser
 - Voice control via Wyoming STT + OpenAI conversation agent
+- Full playlist and album playback (all tracks enqueued, not just the first)
+- Album art, title, artist, and duration shown in the media player card
+- Optional scrobbling — sends "now playing" to Navidrome for Discord status, Last.fm, etc.
 - Re-authentication flow when credentials change
 - Subsonic API token+salt authentication (passwords never sent in plaintext)
 
@@ -71,6 +74,7 @@ Go to **Settings > Devices & Services > Navidrome > Configure** to set:
 | Option | Description |
 |--------|-------------|
 | Target media player | The media player to play audio on (e.g., a Sonos speaker, Chromecast, or browser player). Required for voice control and dashboard playback. |
+| Enable scrobbling | Send "now playing" status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins. Off by default. |
 
 ## Usage
 

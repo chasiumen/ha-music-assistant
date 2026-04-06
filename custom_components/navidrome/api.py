@@ -101,6 +101,19 @@ class NavidromeClient:
         await self._request("ping")
         return True
 
+    # -- Scrobble --
+
+    async def scrobble(self, song_id: str, submission: bool = False) -> None:
+        """Send a scrobble event for a song.
+
+        submission=False: "now playing" notification
+        submission=True: "listened to" (after song ends)
+        """
+        await self._request(
+            "scrobble",
+            {"id": song_id, "submission": str(submission).lower()},
+        )
+
     # -- Search --
 
     async def search3(
@@ -137,6 +150,11 @@ class NavidromeClient:
         """Get an artist with their albums."""
         result = await self._request("getArtist", {"id": artist_id})
         return result.get("artist", {})
+
+    async def get_song(self, song_id: str) -> dict[str, Any]:
+        """Get a single song's metadata."""
+        result = await self._request("getSong", {"id": song_id})
+        return result.get("song", {})
 
     async def get_album(self, album_id: str) -> dict[str, Any]:
         """Get an album with its songs."""

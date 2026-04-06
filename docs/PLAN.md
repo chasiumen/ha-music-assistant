@@ -188,8 +188,10 @@ GET /rest/getPlaylists            → all playlists
 GET /rest/getPlaylist?id=         → playlist + songs
 GET /rest/getGenres               → all genres
 GET /rest/getAlbumList2?type=     → curated lists (newest|random|frequent|starred|byGenre|byYear)
+GET /rest/getSong?id=             → single song metadata
 GET /rest/stream?id=              → audio stream
 GET /rest/getCoverArt?id=&size=   → album art
+GET /rest/scrobble?id=&submission= → scrobble (now playing / listened)
 ```
 
 ### Response Format
