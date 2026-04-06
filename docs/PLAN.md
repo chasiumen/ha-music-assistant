@@ -221,3 +221,20 @@ GET /rest/scrobble?id=&submission= → scrobble (now playing / listened)
   }
 }
 ```
+
+## Next: Queue Persistence and Clear Queue
+
+### Queue Persistence
+- Use HA's `Store` helper to save queue to `.storage/navidrome_queue`
+- Save on: playlist load, track change
+- Restore on: HA restart (in `async_setup_entry`)
+- Store: queue tracks list, current_index
+
+### Clear Queue Service
+- Register `navidrome.clear_queue` service
+- Clears: our queue (NavidromeData), sensor, target player queue
+- Callable from: automations, Developer Tools, queue card button
+
+### Queue Card Clear Button
+- Add a trash/clear icon in the queue card header
+- Calls `navidrome.clear_queue` service on click
