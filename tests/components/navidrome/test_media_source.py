@@ -126,8 +126,10 @@ class TestNavidromeSourceResolve:
 
 def _make_source(client: MagicMock) -> NavidromeSource:
     """Create a NavidromeSource with a mocked entry."""
+    from custom_components.navidrome import NavidromeData
+
     mock_entry = MagicMock()
-    mock_entry.runtime_data = client
+    mock_entry.runtime_data = NavidromeData(client=client)
 
     source = NavidromeSource.__new__(NavidromeSource)
     source.domain = "navidrome"

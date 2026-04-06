@@ -54,7 +54,7 @@ class NavidromeSource(MediaSource):
     @property
     def client(self) -> NavidromeClient:
         """Return the API client."""
-        return self.entry.runtime_data
+        return self.entry.runtime_data.client
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""

@@ -29,7 +29,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from . import NavidromeConfigEntry
+from . import NavidromeConfigEntry, NavidromeData
 from .api import NavidromeClient
 from .const import CONF_SCROBBLE_ENABLED, CONF_TARGET_PLAYER, DOMAIN, LOGGER
 
@@ -124,9 +124,14 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         )
 
     @property
+    def data(self) -> NavidromeData:
+        """Return the shared data."""
+        return self._entry.runtime_data
+
+    @property
     def client(self) -> NavidromeClient:
         """Return the API client."""
-        return self._entry.runtime_data
+        return self.data.client
 
     @property
     def target_player(self) -> str | None:
@@ -270,6 +275,10 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             LOGGER.warning("No playable tracks found for %s", media_id)
             return
 
+        # Store queue in shared data for the sensor
+        self.data.queue = tracks
+        self.data.current_index = 0
+
         # Update entity metadata from the first track
         first = tracks[0]
         self._update_media_attributes(first)
@@ -326,11 +335,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
     @property
     def entity_picture(self) -> str | None:
-        """Return the cover art URL directly, bypassing HA's media proxy.
-
-        HA's proxy fails on self-signed SSL certs, so we serve the
-        Navidrome cover art URL directly to the frontend.
-        """
+        """Return cover art via our local proxy to avoid SSL issues."""
         return self._cover_art_url
 
     def _update_media_attributes(self, track: dict[str, Any]) -> None:
@@ -342,8 +347,9 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._attr_media_album_name = track.get("album")
         self._attr_media_duration = track.get("duration")
         cover_art = track.get("coverArt")
+        # Use local proxy to avoid SSL issues with self-signed certs
         self._cover_art_url = (
-            self.client.cover_art_url(cover_art) if cover_art else None
+            f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
         )
 
     async def _resolve_to_tracks(self, media_id: str) -> list[dict[str, Any]]:

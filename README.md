@@ -34,6 +34,9 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 - Voice control via Wyoming STT + OpenAI conversation agent
 - Full playlist and album playback (all tracks enqueued, not just the first)
 - Album art, title, artist, and duration shown in the media player card
+- Queue sensor with track list for dashboard display
+- Playback controls (play/pause/stop/next/prev/volume) proxied to target player
+- Cover art served via local proxy (avoids SSL issues with self-signed certs)
 - Optional scrobbling — sends "now playing" to Navidrome for Discord status, Last.fm, etc.
 - Re-authentication flow when credentials change
 - Subsonic API token+salt authentication (passwords never sent in plaintext)
@@ -94,6 +97,23 @@ Select a song, then choose which player to use — **"This Browser"** for local 
 
 Add the `media_player.navidrome` entity to your dashboard. When you browse and play from the dashboard card, audio is sent to the **target media player** you configured in the integration options.
 
+Recommended dashboard setup using a vertical stack:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: media-control
+    entity: media_player.navidrome_ryosukemorino_com
+  - type: markdown
+    content: |
+      ## Queue ({{ state_attr('sensor.navidrome_ryosukemorino_com_queue', 'total_tracks') }} tracks)
+      {% for track in state_attr('sensor.navidrome_ryosukemorino_com_queue', 'tracks') %}
+      {{ '▶️' if track.is_current else '&nbsp;&nbsp;&nbsp;' }} {{ loop.index }}. **{{ track.artist }}** - {{ track.title }}
+      {% endfor %}
+```
+
+The queue sensor (`sensor.navidrome_*_queue`) automatically updates when playback starts.
+
 ### Voice Control (plays on target player)
 
 With a voice pipeline configured (Wyoming STT + OpenAI conversation agent), the integration registers a `media_player.navidrome` entity that supports voice search:
@@ -122,7 +142,8 @@ ha-music-assistant/
 │       ├── config_flow.py        # Config flow: URL + credentials + reauth
 │       ├── const.py              # Domain, logger, constants
 │       ├── media_source.py       # MediaSource: browse library + resolve stream URLs
-│       ├── media_player.py       # Media player entity for voice search + play
+│       ├── media_player.py       # Media player entity: search, play, queue, proxy controls
+│       ├── sensor.py             # Queue sensor for dashboard display
 │       ├── manifest.json         # Integration manifest
 │       ├── strings.json          # UI strings
 │       └── translations/
@@ -133,7 +154,9 @@ ha-music-assistant/
 │           ├── conftest.py       # Test fixtures, mock API client
 │           ├── test_api.py       # API client tests (auth, endpoints, errors)
 │           ├── test_config_flow.py  # Config flow tests
-│           └── test_media_source.py # Media source browse + resolve tests
+│           ├── test_media_source.py # Media source browse + resolve tests
+│           ├── test_media_player.py # Media player controls, queue, scrobble tests
+│           └── test_sensor.py       # Queue sensor tests
 ├── docs/
 │   └── PLAN.md                   # Implementation plan and API reference
 ├── hacs.json                     # HACS configuration
