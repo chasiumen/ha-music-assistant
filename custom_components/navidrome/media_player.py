@@ -74,8 +74,8 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     _attr_media_title: str | None = None
     _attr_media_artist: str | None = None
     _attr_media_album_name: str | None = None
-    _attr_media_image_url: str | None = None
     _attr_media_duration: int | None = None
+    _cover_art_url: str | None = None
 
     def __init__(self, entry: NavidromeConfigEntry) -> None:
         """Initialize the media player."""
@@ -324,6 +324,15 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
 
+    @property
+    def entity_picture(self) -> str | None:
+        """Return the cover art URL directly, bypassing HA's media proxy.
+
+        HA's proxy fails on self-signed SSL certs, so we serve the
+        Navidrome cover art URL directly to the frontend.
+        """
+        return self._cover_art_url
+
     def _update_media_attributes(self, track: dict[str, Any]) -> None:
         """Update entity media attributes from a track dict."""
         self._attr_media_content_id = track.get("url")
@@ -333,7 +342,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._attr_media_album_name = track.get("album")
         self._attr_media_duration = track.get("duration")
         cover_art = track.get("coverArt")
-        self._attr_media_image_url = (
+        self._cover_art_url = (
             self.client.cover_art_url(cover_art) if cover_art else None
         )
 
