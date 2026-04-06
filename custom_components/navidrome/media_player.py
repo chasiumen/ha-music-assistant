@@ -278,6 +278,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         **kwargs: Any,
     ) -> None:
         """Play a media item by forwarding to the target media player."""
+        LOGGER.info("async_play_media called: type=%s, id=%s", media_type, media_id)
         target = self.target_player
         if not target:
             LOGGER.warning(
@@ -326,11 +327,13 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         )
 
         # Scrobble "now playing" for the first track
+        LOGGER.info("Scrobble check: enabled=%s, song_id=%s", self.scrobble_enabled, first.get("id"))
         if self.scrobble_enabled and first.get("id"):
             try:
                 await self.client.scrobble(first["id"], submission=False)
-            except Exception:
-                LOGGER.debug("Failed to scrobble now playing for %s", first["id"])
+                LOGGER.info("Scrobble sent for %s", first.get("title", first["id"]))
+            except Exception as err:
+                LOGGER.error("Failed to scrobble for %s: %s", first["id"], err)
 
         # Enqueue remaining tracks
         for track in tracks[1:]:
