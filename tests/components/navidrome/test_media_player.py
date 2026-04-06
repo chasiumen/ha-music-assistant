@@ -406,6 +406,43 @@ class TestSyncQueueIndex:
         assert player.data.current_index == 1
 
 
+class TestSearchMedia:
+    """Test search_media functionality."""
+
+    async def test_search_returns_songs_albums_artists(self) -> None:
+        """Test search returns all result types."""
+        player = _make_player()
+        from homeassistant.components.media_player.browse_media import SearchMediaQuery
+        query = SearchMediaQuery(search_query="Beatles")
+        result = await player.async_search_media(query)
+
+        assert len(result.result) == 3  # 1 song + 1 album + 1 artist
+        # First result is a song
+        assert result.result[0].can_play is True
+        assert "The Beatles" in result.result[0].title
+        # Second is album
+        assert result.result[1].can_expand is True
+        # Third is artist
+        assert result.result[2].can_play is False
+
+
+class TestScrobbleTrack:
+    """Test _scrobble_track method."""
+
+    async def test_scrobble_track_success(self) -> None:
+        """Test scrobble_track calls client.scrobble."""
+        player = _make_player(scrobble_enabled=True)
+        await player._scrobble_track("tr-1")
+        player.client.scrobble.assert_called_once_with("tr-1", submission=False)
+
+    async def test_scrobble_track_failure_silent(self) -> None:
+        """Test scrobble_track handles errors silently."""
+        player = _make_player(scrobble_enabled=True)
+        player.client.scrobble.side_effect = Exception("Network error")
+        # Should not raise
+        await player._scrobble_track("tr-1")
+
+
 class TestSupportedFeatures:
     """Test supported features declaration."""
 

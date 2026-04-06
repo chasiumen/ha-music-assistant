@@ -199,6 +199,67 @@ class TestNavidromeClient:
         assert params.get("id") == "tr-1"
         assert params.get("submission") == "false"
 
+    async def test_get_playlists(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test getPlaylists endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "playlists": {
+                        "playlist": [
+                            {"id": "pl-1", "name": "Favorites", "songCount": 5},
+                        ]
+                    },
+                }
+            }
+        )
+        result = await client.get_playlists()
+        assert len(result) == 1
+        assert result[0]["name"] == "Favorites"
+
+    async def test_get_genres(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test getGenres endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "genres": {
+                        "genre": [
+                            {"value": "Rock", "songCount": 100},
+                            {"value": "Jazz", "songCount": 50},
+                        ]
+                    },
+                }
+            }
+        )
+        result = await client.get_genres()
+        assert len(result) == 2
+        assert result[0]["value"] == "Rock"
+
+    async def test_get_album_list2(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test getAlbumList2 endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "albumList2": {
+                        "album": [
+                            {"id": "al-1", "name": "Abbey Road", "artist": "The Beatles"},
+                        ]
+                    },
+                }
+            }
+        )
+        result = await client.get_album_list2("newest", size=10)
+        assert len(result) == 1
+        assert result[0]["name"] == "Abbey Road"
+
     def test_stream_url(self, client: NavidromeClient) -> None:
         """Test stream URL building."""
         url = client.stream_url("tr-123")

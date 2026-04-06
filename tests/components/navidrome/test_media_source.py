@@ -84,6 +84,106 @@ class TestNavidromeSourceBrowse:
         assert "Random" in titles
 
 
+class TestNavidromeSourceBrowseAsync:
+    """Test async browse methods."""
+
+    async def test_browse_root(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing root returns categories."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(None)
+        result = await source.async_browse_media(item)
+        assert result.title == "Navidrome"
+        assert len(result.children) == 7
+
+    async def test_browse_artists(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing artists category."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_ARTISTS)
+        result = await source.async_browse_media(item)
+        assert result.title == "Artists"
+        mock_navidrome_client.get_artists.assert_called_once()
+        assert len(result.children) == 2
+
+    async def test_browse_artist_detail(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing a specific artist shows albums."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(f"{PREFIX_ARTIST}/ar-1")
+        result = await source.async_browse_media(item)
+        mock_navidrome_client.get_artist.assert_called_once_with("ar-1")
+        assert len(result.children) == 2  # 2 albums in MOCK_ARTIST_DETAIL
+
+    async def test_browse_album_detail(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing a specific album shows songs."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(f"{PREFIX_ALBUM}/al-1")
+        result = await source.async_browse_media(item)
+        mock_navidrome_client.get_album.assert_called_once_with("al-1")
+        assert len(result.children) == 2  # 2 songs in MOCK_ALBUM_DETAIL
+        assert result.can_play is True
+
+    async def test_browse_playlists(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing playlists category."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_PLAYLISTS)
+        result = await source.async_browse_media(item)
+        assert result.title == "Playlists"
+        mock_navidrome_client.get_playlists.assert_called_once()
+
+    async def test_browse_playlist_detail(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing a specific playlist shows entries."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(f"{PREFIX_PLAYLIST}/pl-1")
+        result = await source.async_browse_media(item)
+        mock_navidrome_client.get_playlist.assert_called_once_with("pl-1")
+        assert len(result.children) == 1
+
+    async def test_browse_genres(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing genres category."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_GENRES)
+        result = await source.async_browse_media(item)
+        assert result.title == "Genres"
+        mock_navidrome_client.get_genres.assert_called_once()
+        assert len(result.children) == 2  # Rock, Jazz
+
+    async def test_browse_genre_albums(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing a specific genre shows albums."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(f"{PREFIX_GENRE}/Rock")
+        result = await source.async_browse_media(item)
+        mock_navidrome_client.get_album_list2.assert_called_once_with("byGenre", size=50, genre="Rock")
+
+    async def test_browse_recent(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing Recently Added."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_RECENT)
+        result = await source.async_browse_media(item)
+        assert result.title == "Recently Added"
+        mock_navidrome_client.get_album_list2.assert_called_once()
+
+    async def test_browse_most_played(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing Most Played."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_MOST_PLAYED)
+        result = await source.async_browse_media(item)
+        assert result.title == "Most Played"
+
+    async def test_browse_random(self, mock_navidrome_client: MagicMock) -> None:
+        """Test browsing Random."""
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(CAT_RANDOM)
+        result = await source.async_browse_media(item)
+        assert result.title == "Random"
+
+    async def test_resolve_no_identifier(self, mock_navidrome_client: MagicMock) -> None:
+        """Test resolving with no identifier raises error."""
+        from homeassistant.components.media_player import BrowseError
+        source = _make_source(mock_navidrome_client)
+        item = _make_item(None)
+        with pytest.raises(BrowseError):
+            await source.async_resolve_media(item)
+
+
 class TestNavidromeSourceResolve:
     """Test media source resolve functionality."""
 
