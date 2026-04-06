@@ -23,10 +23,11 @@ from homeassistant.components.media_player.browse_media import (
     SearchMedia,
     SearchMediaQuery,
 )
-from homeassistant.const import CONF_URL
-from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_URL, STATE_PLAYING, STATE_PAUSED, STATE_IDLE
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 
 from . import NavidromeConfigEntry
 from .api import NavidromeClient
@@ -56,9 +57,16 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     _attr_name = None
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
     _attr_supported_features = (
-        MediaPlayerEntityFeature.SEARCH_MEDIA
+        MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.PAUSE
+        | MediaPlayerEntityFeature.STOP
+        | MediaPlayerEntityFeature.NEXT_TRACK
+        | MediaPlayerEntityFeature.PREVIOUS_TRACK
+        | MediaPlayerEntityFeature.VOLUME_SET
+        | MediaPlayerEntityFeature.SEARCH_MEDIA
         | MediaPlayerEntityFeature.PLAY_MEDIA
         | MediaPlayerEntityFeature.BROWSE_MEDIA
+        | MediaPlayerEntityFeature.MEDIA_ENQUEUE
     )
     _attr_state = MediaPlayerState.IDLE
     _attr_media_content_id: str | None = None
@@ -80,6 +88,40 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             name=entry.title,
             configuration_url=entry.data.get(CONF_URL),
         )
+        self._unsub_state_listener: callback | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Start tracking target player state."""
+        self._setup_state_listener()
+
+    def _setup_state_listener(self) -> None:
+        """Set up a state change listener for the target player."""
+        if self._unsub_state_listener:
+            self._unsub_state_listener()
+            self._unsub_state_listener = None
+
+        target = self.target_player
+        if not target:
+            return
+
+        @callback
+        def _handle_target_state_change(event: Event) -> None:
+            """Sync state from target player."""
+            new_state = event.data.get("new_state")
+            if not new_state:
+                return
+            state = new_state.state
+            if state == STATE_PLAYING:
+                self._attr_state = MediaPlayerState.PLAYING
+            elif state == STATE_PAUSED:
+                self._attr_state = MediaPlayerState.PAUSED
+            else:
+                self._attr_state = MediaPlayerState.IDLE
+            self.async_write_ha_state()
+
+        self._unsub_state_listener = async_track_state_change_event(
+            self.hass, [target], _handle_target_state_change
+        )
 
     @property
     def client(self) -> NavidromeClient:
@@ -95,6 +137,46 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     def scrobble_enabled(self) -> bool:
         """Return whether scrobbling is enabled."""
         return self._entry.options.get(CONF_SCROBBLE_ENABLED, False)
+
+    async def _proxy_command(self, service: str, **data: Any) -> None:
+        """Forward a media player command to the target player."""
+        target = self.target_player
+        if not target:
+            return
+        service_data = {"entity_id": target, **data}
+        await self.hass.services.async_call(
+            "media_player", service, service_data, blocking=True
+        )
+
+    async def async_media_play(self) -> None:
+        """Send play command to target player."""
+        await self._proxy_command("media_play")
+        self._attr_state = MediaPlayerState.PLAYING
+        self.async_write_ha_state()
+
+    async def async_media_pause(self) -> None:
+        """Send pause command to target player."""
+        await self._proxy_command("media_pause")
+        self._attr_state = MediaPlayerState.PAUSED
+        self.async_write_ha_state()
+
+    async def async_media_stop(self) -> None:
+        """Send stop command to target player."""
+        await self._proxy_command("media_stop")
+        self._attr_state = MediaPlayerState.IDLE
+        self.async_write_ha_state()
+
+    async def async_media_next_track(self) -> None:
+        """Send next track command to target player."""
+        await self._proxy_command("media_next_track")
+
+    async def async_media_previous_track(self) -> None:
+        """Send previous track command to target player."""
+        await self._proxy_command("media_previous_track")
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume on target player."""
+        await self._proxy_command("volume_set", volume_level=volume)
 
     async def async_search_media(
         self,
@@ -192,17 +274,27 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         first = tracks[0]
         self._update_media_attributes(first)
 
-        # Play the first track
+        # Play the first track with metadata
+        play_data: dict[str, Any] = {
+            "entity_id": target,
+            "media_content_id": async_process_play_media_url(
+                self.hass, first["url"]
+            ),
+            "media_content_type": "audio/mpeg",
+        }
+        if first.get("title") or first.get("coverArt"):
+            play_data["extra"] = {
+                "title": first.get("title"),
+                "artist": first.get("artist"),
+                "album": first.get("album"),
+                "thumb": self.client.cover_art_url(first["coverArt"])
+                if first.get("coverArt")
+                else None,
+            }
         await self.hass.services.async_call(
             "media_player",
             SERVICE_PLAY_MEDIA,
-            {
-                "entity_id": target,
-                "media_content_id": async_process_play_media_url(
-                    self.hass, first["url"]
-                ),
-                "media_content_type": "audio/mpeg",
-            },
+            play_data,
             blocking=True,
         )
 
