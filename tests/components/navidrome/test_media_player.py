@@ -406,6 +406,80 @@ class TestSyncQueueIndex:
         assert player.data.current_index == 1
 
 
+class TestFindInQueue:
+    """Test _find_in_queue method."""
+
+    def test_find_by_media_source_uri(self) -> None:
+        """Test finding a song by media-source URI."""
+        player = _make_player()
+        player.data.queue = [
+            {"id": "tr-1", "title": "Track A"},
+            {"id": "tr-2", "title": "Track B"},
+        ]
+        assert player._find_in_queue("media-source://navidrome/song/tr-2") == 1
+
+    def test_find_by_stream_url(self) -> None:
+        """Test finding a song by stream URL."""
+        player = _make_player()
+        player.data.queue = [
+            {"id": "tr-1", "title": "Track A"},
+            {"id": "tr-2", "title": "Track B"},
+        ]
+        url = "http://navidrome.local:4533/rest/stream?id=tr-1&u=admin"
+        assert player._find_in_queue(url) == 0
+
+    def test_not_found(self) -> None:
+        """Test returns None when not in queue."""
+        player = _make_player()
+        player.data.queue = [{"id": "tr-1", "title": "Track A"}]
+        assert player._find_in_queue("media-source://navidrome/song/tr-99") is None
+
+    def test_empty_queue(self) -> None:
+        """Test returns None with empty queue."""
+        player = _make_player()
+        assert player._find_in_queue("media-source://navidrome/song/tr-1") is None
+
+    def test_album_uri_not_matched(self) -> None:
+        """Test album URIs don't match queue songs."""
+        player = _make_player()
+        player.data.queue = [{"id": "tr-1", "title": "Track A"}]
+        assert player._find_in_queue("media-source://navidrome/album/al-1") is None
+
+
+class TestPlayFromQueueIndex:
+    """Test _play_from_queue_index method."""
+
+    async def test_plays_from_index_and_enqueues_rest(self) -> None:
+        """Test playing from a queue index enqueues remaining tracks."""
+        player = _make_player()
+        player.async_write_ha_state = MagicMock()
+        player.data.queue = [
+            {"id": "tr-1", "url": "http://a/1", "title": "A", "coverArt": None},
+            {"id": "tr-2", "url": "http://a/2", "title": "B", "coverArt": None},
+            {"id": "tr-3", "url": "http://a/3", "title": "C", "coverArt": None},
+        ]
+
+        await player._play_from_queue_index("media_player.test_speaker", 1)
+
+        assert player.data.current_index == 1
+        # stop + clear + play track B + enqueue track C = 4 calls
+        assert player.hass.services.async_call.call_count == 4
+
+    async def test_updates_metadata(self) -> None:
+        """Test playing from index updates media attributes."""
+        player = _make_player()
+        player.async_write_ha_state = MagicMock()
+        player.data.queue = [
+            {"id": "tr-1", "url": "http://a/1", "title": "A", "artist": "X", "coverArt": None},
+            {"id": "tr-2", "url": "http://a/2", "title": "B", "artist": "Y", "coverArt": "ca-2"},
+        ]
+
+        await player._play_from_queue_index("media_player.test_speaker", 1)
+
+        assert player._attr_media_title == "B"
+        assert player._attr_media_artist == "Y"
+
+
 class TestSearchMedia:
     """Test search_media functionality."""
 

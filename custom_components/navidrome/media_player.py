@@ -287,6 +287,13 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             )
             return
 
+        # Check if this is a song already in our queue — jump to it instead of rebuilding
+        queue_index = self._find_in_queue(media_id)
+        if queue_index is not None:
+            LOGGER.info("Song found in queue at index %d, jumping", queue_index)
+            await self._play_from_queue_index(target, queue_index)
+            return
+
         # Collect all tracks to play
         tracks = await self._resolve_to_tracks(media_id)
 
@@ -467,6 +474,97 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             self.hass, media_id, self.entity_id
         )
         return [{"id": None, "url": play_item.url}]
+
+    def _find_in_queue(self, media_id: str) -> int | None:
+        """Check if a media_id matches a song in the current queue.
+
+        Returns the queue index if found, None otherwise.
+        """
+        if not self.data.queue:
+            return None
+
+        # Extract song ID from media-source URI
+        song_id = None
+        if media_id.startswith("media-source://navidrome/song/"):
+            song_id = media_id.replace("media-source://navidrome/song/", "")
+        else:
+            song_id = self._extract_song_id_from_url(media_id)
+
+        if not song_id:
+            return None
+
+        for i, track in enumerate(self.data.queue):
+            if track.get("id") == song_id:
+                return i
+        return None
+
+    async def _play_from_queue_index(self, target: str, index: int) -> None:
+        """Play from a specific position in the existing queue."""
+        tracks = self.data.queue
+        if index < 0 or index >= len(tracks):
+            return
+
+        # Update current index
+        self.data.current_index = index
+        first = tracks[index]
+        self._update_media_attributes(first)
+
+        # Clear target and play from this position
+        try:
+            await self.hass.services.async_call(
+                "media_player", "media_stop",
+                {"entity_id": target}, blocking=True,
+            )
+        except Exception:
+            pass
+
+        try:
+            await self.hass.services.async_call(
+                "media_player", "clear_playlist",
+                {"entity_id": target}, blocking=True,
+            )
+        except Exception:
+            pass
+
+        # Play the selected track
+        await self.hass.services.async_call(
+            "media_player", SERVICE_PLAY_MEDIA,
+            {
+                "entity_id": target,
+                "media_content_id": async_process_play_media_url(
+                    self.hass, first["url"]
+                ),
+                "media_content_type": "audio/mpeg",
+            },
+            blocking=True,
+        )
+
+        # Scrobble
+        if self.scrobble_enabled and first.get("id"):
+            try:
+                await self.client.scrobble(first["id"], submission=False)
+                LOGGER.info("Scrobble sent for %s", first.get("title", first["id"]))
+            except Exception as err:
+                LOGGER.error("Failed to scrobble for %s: %s", first["id"], err)
+
+        # Enqueue remaining tracks after the selected one
+        for track in tracks[index + 1:]:
+            await self.hass.services.async_call(
+                "media_player", SERVICE_PLAY_MEDIA,
+                {
+                    "entity_id": target,
+                    "media_content_id": async_process_play_media_url(
+                        self.hass, track["url"]
+                    ),
+                    "media_content_type": "audio/mpeg",
+                    "enqueue": "add",
+                },
+                blocking=True,
+            )
+
+        self._attr_state = MediaPlayerState.PLAYING
+        self.async_write_ha_state()
+        LOGGER.info("Playing from queue index %d, %d remaining tracks", index, len(tracks) - index - 1)
 
     def _sync_queue_index(self, title: str, artist: str | None) -> None:
         """Update queue current_index based on the currently playing track."""
