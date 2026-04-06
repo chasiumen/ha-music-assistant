@@ -7,7 +7,7 @@ from typing import Any
 
 from aiohttp import web
 
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
@@ -61,10 +61,12 @@ async def async_setup_entry(
     hass.http.register_view(NavidromeCoverArtView(data))
 
     # Register custom queue card frontend resource
-    hass.http.register_static_path(
-        "/navidrome/navidrome-queue-card.js",
-        hass.config.path("custom_components/navidrome/www/navidrome-queue-card.js"),
-        cache_headers=True,
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(
+            url_path="/navidrome/navidrome-queue-card.js",
+            path=hass.config.path("custom_components/navidrome/www/navidrome-queue-card.js"),
+            cache_headers=True,
+        )]
     )
     # Add as Lovelace resource if not already added
     await _register_card_resource(hass)
