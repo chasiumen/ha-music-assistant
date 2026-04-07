@@ -1,7 +1,21 @@
 class NavidromeQueueCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
-    this._render();
+
+    // Only re-render if queue data actually changed
+    const state = hass.states[this._config?.entity];
+    const newTracks = state?.attributes?.tracks;
+    const newIndex = state?.attributes?.current_index;
+    const stateChanged =
+      JSON.stringify(newTracks) !== this._lastTracksJson ||
+      newIndex !== this._lastIndex;
+
+    if (stateChanged || !this._rendered) {
+      this._lastTracksJson = JSON.stringify(newTracks);
+      const trackChanged = this._lastIndex !== newIndex;
+      this._lastIndex = newIndex;
+      this._render(trackChanged);
+    }
   }
 
   setConfig(config) {
@@ -28,7 +42,8 @@ class NavidromeQueueCard extends HTMLElement {
     };
   }
 
-  _render() {
+  _render(scrollToCurrent = false) {
+    this._rendered = true;
     if (!this._hass || !this._config) return;
 
     const state = this._hass.states[this._config.entity];
@@ -213,13 +228,15 @@ class NavidromeQueueCard extends HTMLElement {
       </style>
     `;
 
-    // Scroll current track into view
-    requestAnimationFrame(() => {
-      const current = this.querySelector(".nq-current");
-      if (current) {
-        current.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    });
+    // Only scroll to current track when it actually changes
+    if (scrollToCurrent) {
+      requestAnimationFrame(() => {
+        const current = this.querySelector(".nq-current");
+        if (current) {
+          current.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+      });
+    }
 
     // Add click handlers for play buttons
     this.querySelectorAll(".nq-play-btn").forEach((btn) => {
