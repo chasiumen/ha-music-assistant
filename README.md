@@ -148,7 +148,7 @@ Card options:
 |--------|---------|-------------|
 | `entity` | (required) | Queue sensor entity ID |
 | `player_entity` | (auto-detected) | Navidrome media player entity for click-to-play |
-| `max_height` | `400` | Maximum height in pixels (scrollable) |
+| `max_visible` | `10` | Number of tracks visible before scrolling |
 | `title` | `Queue` | Card header text |
 
 Search card options:

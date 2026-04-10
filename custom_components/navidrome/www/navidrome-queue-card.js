@@ -25,7 +25,7 @@ class NavidromeQueueCard extends HTMLElement {
     this._config = {
       entity: config.entity,
       player_entity: config.player_entity || null,
-      max_height: config.max_height || 400,
+      max_visible: config.max_visible || 10,
       title: config.title || "Queue",
       ...config,
     };
@@ -38,7 +38,7 @@ class NavidromeQueueCard extends HTMLElement {
   static getStubConfig() {
     return {
       entity: "sensor.navidrome_ryosukemorino_com_queue",
-      max_height: 400,
+      max_visible: 10,
     };
   }
 
@@ -122,7 +122,7 @@ class NavidromeQueueCard extends HTMLElement {
         }
         .nq-list {
           padding: 4px 0 8px;
-          max-height: ${this._config.max_height}px;
+          max-height: ${this._config.max_visible * 44}px;
           overflow-y: auto;
           scroll-behavior: smooth;
         }
