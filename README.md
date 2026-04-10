@@ -151,6 +151,17 @@ Card options:
 | `max_height` | `400` | Maximum height in pixels (scrollable) |
 | `title` | `Queue` | Card header text |
 
+Search card options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `entity` | (required) | Navidrome media player entity ID |
+| `max_songs` | `20` | Max songs to display in results |
+| `max_albums` | `10` | Max albums to display in results |
+| `max_artists` | `5` | Max artists to display in results |
+| `max_height` | `500` | Max height in pixels (scrollable) |
+| `debounce_ms` | `400` | Search delay in milliseconds |
+
 ### Voice Control (plays on target player)
 
 With a voice pipeline configured (Wyoming STT + OpenAI conversation agent), the integration registers a `media_player.navidrome` entity that supports voice search:

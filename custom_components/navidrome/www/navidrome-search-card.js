@@ -16,6 +16,9 @@ class NavidromeSearchCard extends HTMLElement {
       max_height: config.max_height || 500,
       title: config.title || "Search",
       debounce_ms: config.debounce_ms || 400,
+      max_songs: config.max_songs || 20,
+      max_albums: config.max_albums || 10,
+      max_artists: config.max_artists || 5,
       ...config,
     };
     this._searchResults = null;
@@ -256,9 +259,9 @@ class NavidromeSearchCard extends HTMLElement {
     }
 
     // Categorize results
-    const songs = results.filter((r) => r.media_class === "track");
-    const albums = results.filter((r) => r.media_class === "album");
-    const artists = results.filter((r) => r.media_class === "artist");
+    const songs = results.filter((r) => r.media_class === "track").slice(0, this._config.max_songs);
+    const albums = results.filter((r) => r.media_class === "album").slice(0, this._config.max_albums);
+    const artists = results.filter((r) => r.media_class === "artist").slice(0, this._config.max_artists);
 
     let html = "";
 
