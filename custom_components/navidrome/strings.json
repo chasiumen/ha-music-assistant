@@ -53,6 +53,54 @@
     "clear_queue": {
       "name": "Clear Queue",
       "description": "Clear the Navidrome playback queue and stop the target player."
+    },
+    "save_queue_as_playlist": {
+      "name": "Save Queue as Playlist",
+      "description": "Save the current playback queue as a new Navidrome playlist.",
+      "fields": {
+        "name": {
+          "name": "Playlist Name",
+          "description": "Name for the new playlist."
+        }
+      }
+    },
+    "add_to_playlist": {
+      "name": "Add to Playlist",
+      "description": "Add a song to an existing Navidrome playlist.",
+      "fields": {
+        "playlist_id": {
+          "name": "Playlist ID",
+          "description": "The Navidrome playlist ID."
+        },
+        "song_id": {
+          "name": "Song ID",
+          "description": "The Navidrome song ID to add."
+        }
+      }
+    },
+    "add_to_queue": {
+      "name": "Add to Queue",
+      "description": "Add a song to the current playback queue without replacing it.",
+      "fields": {
+        "song_id": {
+          "name": "Song ID",
+          "description": "The Navidrome song ID to add."
+        }
+      }
+    },
+    "reorder_queue": {
+      "name": "Reorder Queue",
+      "description": "Move a track from one position to another in the queue.",
+      "fields": {
+        "from_index": {
+          "name": "From Index",
+          "description": "Current position (0-based)."
+        },
+        "to_index": {
+          "name": "To Index",
+          "description": "New position (0-based)."
+        }
+      }
     }
   }
 }

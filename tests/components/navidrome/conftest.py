@@ -192,6 +192,8 @@ def mock_navidrome_client() -> Generator[MagicMock]:
         client.get_genres = AsyncMock(return_value=MOCK_GENRES)
         client.get_album_list2 = AsyncMock(return_value=MOCK_ALBUM_LIST)
         client.scrobble = AsyncMock(return_value=None)
+        client.create_playlist = AsyncMock(return_value={"id": "pl-new", "name": "New"})
+        client.update_playlist = AsyncMock(return_value=None)
         client.stream_url = MagicMock(
             side_effect=lambda song_id: f"http://navidrome.local:4533/rest/stream?id={song_id}"
         )

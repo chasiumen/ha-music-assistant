@@ -64,7 +64,8 @@ class NavidromeQueueCard extends HTMLElement {
         const duration = track.duration ? `${mins}:${secs}` : "";
 
         return `
-        <div class="nq-track ${isCurrent ? "nq-current" : ""}" data-index="${track.index}">
+        <div class="nq-track ${isCurrent ? "nq-current" : ""}" data-index="${track.index}" draggable="true">
+          <div class="nq-drag-handle" title="Drag to reorder">⠿</div>
           <div class="nq-index">${isCurrent ? "▶" : track.index}</div>
           <div class="nq-info">
             <div class="nq-title">${track.title || "Unknown"}</div>
@@ -147,6 +148,24 @@ class NavidromeQueueCard extends HTMLElement {
         }
         .nq-current:hover {
           background: var(--primary-color);
+        }
+        .nq-drag-handle {
+          cursor: grab;
+          opacity: 0.3;
+          font-size: 1em;
+          min-width: 16px;
+          text-align: center;
+          user-select: none;
+        }
+        .nq-drag-handle:hover {
+          opacity: 0.7;
+        }
+        .nq-track.nq-dragging {
+          opacity: 0.4;
+          background: var(--secondary-background-color);
+        }
+        .nq-track.nq-drag-over {
+          border-top: 2px solid var(--primary-color);
         }
         .nq-index {
           min-width: 28px;
@@ -263,6 +282,47 @@ class NavidromeQueueCard extends HTMLElement {
         this._clearQueue();
       });
     }
+
+    // Drag-to-reorder handlers
+    let dragFromIndex = null;
+    this.querySelectorAll(".nq-track[draggable]").forEach((row) => {
+      row.addEventListener("dragstart", (e) => {
+        dragFromIndex = parseInt(row.dataset.index) - 1; // Convert to 0-based
+        row.classList.add("nq-dragging");
+        e.dataTransfer.effectAllowed = "move";
+      });
+
+      row.addEventListener("dragend", () => {
+        row.classList.remove("nq-dragging");
+        this.querySelectorAll(".nq-drag-over").forEach((el) =>
+          el.classList.remove("nq-drag-over")
+        );
+      });
+
+      row.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        // Clear previous drag-over highlights
+        this.querySelectorAll(".nq-drag-over").forEach((el) =>
+          el.classList.remove("nq-drag-over")
+        );
+        row.classList.add("nq-drag-over");
+      });
+
+      row.addEventListener("dragleave", () => {
+        row.classList.remove("nq-drag-over");
+      });
+
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.classList.remove("nq-drag-over");
+        const dragToIndex = parseInt(row.dataset.index) - 1; // Convert to 0-based
+        if (dragFromIndex !== null && dragFromIndex !== dragToIndex) {
+          this._reorderTrack(dragFromIndex, dragToIndex);
+        }
+        dragFromIndex = null;
+      });
+    });
   }
 
   _playTrack(index) {
@@ -288,6 +348,14 @@ class NavidromeQueueCard extends HTMLElement {
       entity_id: playerEntity,
       media_content_id: `media-source://navidrome/song/${track.song_id}`,
       media_content_type: "music",
+    });
+  }
+
+  _reorderTrack(fromIndex, toIndex) {
+    if (!this._hass) return;
+    this._hass.callService("navidrome", "reorder_queue", {
+      from_index: fromIndex,
+      to_index: toIndex,
     });
   }
 

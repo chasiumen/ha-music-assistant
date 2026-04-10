@@ -1,3 +1,63 @@
 clear_queue:
   name: Clear Queue
   description: Clear the Navidrome playback queue and stop the target player.
+
+save_queue_as_playlist:
+  name: Save Queue as Playlist
+  description: Save the current playback queue as a new Navidrome playlist.
+  fields:
+    name:
+      name: Playlist Name
+      description: Name for the new playlist.
+      required: true
+      selector:
+        text:
+
+add_to_playlist:
+  name: Add to Playlist
+  description: Add a song to an existing Navidrome playlist.
+  fields:
+    playlist_id:
+      name: Playlist ID
+      description: The Navidrome playlist ID to add the song to.
+      required: true
+      selector:
+        text:
+    song_id:
+      name: Song ID
+      description: The Navidrome song ID to add.
+      required: true
+      selector:
+        text:
+
+add_to_queue:
+  name: Add to Queue
+  description: Add a song to the current playback queue without replacing it.
+  fields:
+    song_id:
+      name: Song ID
+      description: The Navidrome song ID to add to the queue.
+      required: true
+      selector:
+        text:
+
+reorder_queue:
+  name: Reorder Queue
+  description: Move a track from one position to another in the queue.
+  fields:
+    from_index:
+      name: From Index
+      description: Current position of the track (0-based).
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+    to_index:
+      name: To Index
+      description: New position for the track (0-based).
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box

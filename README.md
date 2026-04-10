@@ -39,6 +39,9 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 - Cover art served via local proxy (avoids SSL issues with self-signed certs)
 - Queue persists across HA restarts
 - Clear queue service (`navidrome.clear_queue`) and card button
+- Search card — search songs, albums, artists from the dashboard
+- Playlist management — save queue as playlist, add songs to playlists
+- Drag-to-reorder tracks in the queue card
 - Optional scrobbling — sends "now playing" to Navidrome for Discord status, Last.fm, etc.
 - Re-authentication flow when credentials change
 - Subsonic API token+salt authentication (passwords never sent in plaintext)
@@ -106,10 +109,36 @@ type: vertical-stack
 cards:
   - type: media-control
     entity: media_player.navidrome_ryosukemorino_com
+  - type: custom:navidrome-search-card
+    entity: media_player.navidrome_ryosukemorino_com
   - type: custom:navidrome-queue-card
     entity: sensor.navidrome_ryosukemorino_com_queue
-    max_visible: 10
+    max_height: 400
 ```
+
+### Search Card
+
+The search card lets you find and play music without browsing:
+
+```yaml
+type: custom:navidrome-search-card
+entity: media_player.navidrome_ryosukemorino_com
+```
+
+- Type to search — results appear grouped by Songs, Albums, Artists
+- Click ▶ to play immediately
+- Click ➕ to add to the current queue
+- Click 💾 to save to a Navidrome playlist
+
+### Services
+
+| Service | Description |
+|---|---|
+| `navidrome.clear_queue` | Clear the playback queue and stop player |
+| `navidrome.save_queue_as_playlist` | Save current queue as a new Navidrome playlist (param: `name`) |
+| `navidrome.add_to_playlist` | Add a song to an existing playlist (params: `playlist_id`, `song_id`) |
+| `navidrome.add_to_queue` | Append a song to the queue (param: `song_id`) |
+| `navidrome.reorder_queue` | Move a track in the queue (params: `from_index`, `to_index`) |
 
 The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted. Click any track to play it. The list auto-scrolls to the current track.
 
@@ -152,6 +181,7 @@ ha-music-assistant/
 │       ├── media_source.py       # MediaSource: browse library + resolve stream URLs
 │       ├── media_player.py       # Media player entity: search, play, queue, proxy controls
 │       ├── sensor.py             # Queue sensor for dashboard display
+│       ├── services.yaml         # Service definitions
 │       ├── manifest.json         # Integration manifest
 │       ├── strings.json          # UI strings
 │       └── translations/

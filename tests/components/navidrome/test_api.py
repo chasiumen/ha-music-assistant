@@ -260,6 +260,67 @@ class TestNavidromeClient:
         assert len(result) == 1
         assert result[0]["name"] == "Abbey Road"
 
+    async def test_create_playlist(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test createPlaylist endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "playlist": {
+                        "id": "pl-new",
+                        "name": "My Playlist",
+                        "songCount": 2,
+                        "entry": [],
+                    },
+                }
+            }
+        )
+        result = await client.create_playlist("My Playlist", ["tr-1", "tr-2"])
+        assert result["id"] == "pl-new"
+        assert result["name"] == "My Playlist"
+
+    async def test_create_playlist_no_songs(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test creating an empty playlist."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "playlist": {"id": "pl-empty", "name": "Empty"},
+                }
+            }
+        )
+        result = await client.create_playlist("Empty")
+        assert result["id"] == "pl-empty"
+
+    async def test_update_playlist(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test updatePlaylist endpoint."""
+        mock_session.get.return_value = _mock_response(
+            {"subsonic-response": {"status": "ok"}}
+        )
+        await client.update_playlist(
+            "pl-1",
+            name="Renamed",
+            songs_to_add=["tr-3"],
+            indices_to_remove=[0],
+        )
+        mock_session.get.assert_called_once()
+
+    async def test_update_playlist_add_only(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Test adding songs to a playlist without other changes."""
+        mock_session.get.return_value = _mock_response(
+            {"subsonic-response": {"status": "ok"}}
+        )
+        await client.update_playlist("pl-1", songs_to_add=["tr-5", "tr-6"])
+        mock_session.get.assert_called_once()
+
     def test_stream_url(self, client: NavidromeClient) -> None:
         """Test stream URL building."""
         url = client.stream_url("tr-123")

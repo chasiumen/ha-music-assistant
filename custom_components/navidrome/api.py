@@ -171,6 +171,48 @@ class NavidromeClient:
         result = await self._request("getPlaylist", {"id": playlist_id})
         return result.get("playlist", {})
 
+    # -- Playlist management --
+
+    async def create_playlist(
+        self, name: str, song_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Create a new playlist.
+
+        Returns the created playlist with songs.
+        """
+        params: dict[str, Any] = {"name": name}
+        if song_ids:
+            params["songId"] = song_ids
+        result = await self._request("createPlaylist", params)
+        return result.get("playlist", {})
+
+    async def update_playlist(
+        self,
+        playlist_id: str,
+        name: str | None = None,
+        songs_to_add: list[str] | None = None,
+        indices_to_remove: list[int] | None = None,
+        comment: str | None = None,
+        public: bool | None = None,
+    ) -> None:
+        """Update an existing playlist.
+
+        Can add songs, remove songs by index, rename, change comment/public.
+        Removes happen before adds.
+        """
+        params: dict[str, Any] = {"playlistId": playlist_id}
+        if name is not None:
+            params["name"] = name
+        if songs_to_add:
+            params["songIdToAdd"] = songs_to_add
+        if indices_to_remove:
+            params["songIndexToRemove"] = indices_to_remove
+        if comment is not None:
+            params["comment"] = comment
+        if public is not None:
+            params["public"] = str(public).lower()
+        await self._request("updatePlaylist", params)
+
     async def get_genres(self) -> list[dict[str, Any]]:
         """Get all genres."""
         result = await self._request("getGenres")
