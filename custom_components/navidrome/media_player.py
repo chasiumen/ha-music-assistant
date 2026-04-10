@@ -208,9 +208,9 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         """Search the Navidrome library."""
         results = await self.client.search3(
             query.search_query,
-            song_count=10,
-            album_count=5,
-            artist_count=5,
+            song_count=30,
+            album_count=10,
+            artist_count=10,
         )
 
         items: list[BrowseMedia] = []
