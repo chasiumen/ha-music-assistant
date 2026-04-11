@@ -133,3 +133,9 @@ class TestNavidromeQueueSensor:
         """Test sensor name."""
         sensor = _make_sensor()
         assert sensor.name == "Queue"
+
+    def test_has_async_added_to_hass(self) -> None:
+        """Test sensor has async_added_to_hass for dispatcher subscription."""
+        sensor = _make_sensor()
+        assert hasattr(sensor, "async_added_to_hass")
+        assert callable(sensor.async_added_to_hass)

@@ -46,6 +46,18 @@ class NavidromeQueueSensor(SensorEntity):
             configuration_url=entry.data.get(CONF_URL),
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to queue update signals."""
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
+        from .const import SIGNAL_QUEUE_UPDATED
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_QUEUE_UPDATED}_{self._entry.entry_id}",
+                self.async_write_ha_state,
+            )
+        )
+
     @property
     def data(self) -> NavidromeData:
         """Return the shared data."""

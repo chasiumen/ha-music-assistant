@@ -1,15 +1,19 @@
-"""Tests for queue persistence and clear queue."""
+"""Tests for queue persistence, clear queue, and dispatcher signaling."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.navidrome import NavidromeData
 
 
-def _make_data(queue: list = None, current_index: int = 0) -> NavidromeData:
+def _make_data(
+    queue: list = None,
+    current_index: int = 0,
+    with_hass: bool = False,
+) -> NavidromeData:
     """Create NavidromeData with a mock store."""
     mock_client = MagicMock()
     mock_store = MagicMock()
@@ -22,6 +26,9 @@ def _make_data(queue: list = None, current_index: int = 0) -> NavidromeData:
         queue=queue or [],
         current_index=current_index,
     )
+    if with_hass:
+        data.hass = MagicMock()
+        data.entry_id = "test_entry_123"
     return data
 
 
@@ -127,3 +134,43 @@ class TestClearQueue:
 
         assert data.queue == []
         assert data.current_index == 0
+
+
+class TestDispatcherSignaling:
+    """Test that save_queue fires a dispatcher signal."""
+
+    async def test_save_fires_dispatcher(self) -> None:
+        """Test save_queue sends dispatcher signal when hass is set."""
+        data = _make_data(with_hass=True)
+
+        with patch(
+            "custom_components.navidrome.async_dispatcher_send"
+        ) as mock_dispatch:
+            await data.save_queue()
+
+            mock_dispatch.assert_called_once_with(
+                data.hass,
+                "navidrome_queue_updated_test_entry_123",
+            )
+
+    async def test_save_no_dispatcher_without_hass(self) -> None:
+        """Test save_queue does not fire dispatcher when hass is None."""
+        data = _make_data(with_hass=False)
+
+        with patch(
+            "custom_components.navidrome.async_dispatcher_send"
+        ) as mock_dispatch:
+            await data.save_queue()
+
+            mock_dispatch.assert_not_called()
+
+    async def test_clear_fires_dispatcher(self) -> None:
+        """Test clear_queue fires dispatcher via save_queue."""
+        data = _make_data(queue=[{"id": "tr-1"}], with_hass=True)
+
+        with patch(
+            "custom_components.navidrome.async_dispatcher_send"
+        ) as mock_dispatch:
+            await data.clear_queue()
+
+            mock_dispatch.assert_called_once()

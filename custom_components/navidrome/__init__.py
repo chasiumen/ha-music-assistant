@@ -31,14 +31,20 @@ class NavidromeData:
     store: Store | None = None
     queue: list[dict[str, Any]] = field(default_factory=list)
     current_index: int = 0
+    hass: Any | None = None
+    entry_id: str | None = None
 
     async def save_queue(self) -> None:
-        """Persist queue to disk."""
+        """Persist queue to disk and signal the sensor to refresh."""
         if self.store:
             await self.store.async_save({
                 "queue": self.queue,
                 "current_index": self.current_index,
             })
+        if self.hass and self.entry_id:
+            from homeassistant.helpers.dispatcher import async_dispatcher_send
+            from .const import SIGNAL_QUEUE_UPDATED
+            async_dispatcher_send(self.hass, f"{SIGNAL_QUEUE_UPDATED}_{self.entry_id}")
 
     async def load_queue(self) -> None:
         """Restore queue from disk."""
@@ -87,6 +93,8 @@ async def async_setup_entry(
     # Create shared data with persistent storage
     store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}_{entry.entry_id}")
     data = NavidromeData(client=client, store=store)
+    data.hass = hass
+    data.entry_id = entry.entry_id
 
     # Restore queue from disk
     await data.load_queue()
