@@ -345,9 +345,11 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 )
             )
 
-        # Playlist search: filter by substring on cached playlist list
+        # Playlist search: filter by substring on cached playlist list.
+        # The WS handler passes media_filter_classes=[] (not None) when the
+        # caller doesn't filter, so treat any empty value as "no filter".
         filter_classes = getattr(query, "media_filter_classes", None)
-        include_playlists = filter_classes is None or MediaClass.PLAYLIST in filter_classes
+        include_playlists = not filter_classes or MediaClass.PLAYLIST in filter_classes
         if include_playlists:
             now = time.monotonic()
             if (
