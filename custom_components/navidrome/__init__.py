@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +15,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VER
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
@@ -33,6 +35,16 @@ class NavidromeData:
     current_index: int = 0
     hass: Any | None = None
     entry_id: str | None = None
+    repeat_mode: str = "off"
+    queue_dirty: bool = False
+    enqueue_task: Any | None = None  # asyncio.Task | None
+    target_lock: Any = field(default_factory=asyncio.Lock)
+
+    def cancel_enqueue(self) -> None:
+        """Cancel any in-progress background enqueue task."""
+        if self.enqueue_task and not self.enqueue_task.done():
+            self.enqueue_task.cancel()
+        self.enqueue_task = None
 
     async def save_queue(self) -> None:
         """Persist queue to disk and signal the sensor to refresh."""
@@ -40,9 +52,10 @@ class NavidromeData:
             await self.store.async_save({
                 "queue": self.queue,
                 "current_index": self.current_index,
+                "repeat_mode": self.repeat_mode,
+                "queue_dirty": self.queue_dirty,
             })
         if self.hass and self.entry_id:
-            from homeassistant.helpers.dispatcher import async_dispatcher_send
             from .const import SIGNAL_QUEUE_UPDATED
             async_dispatcher_send(self.hass, f"{SIGNAL_QUEUE_UPDATED}_{self.entry_id}")
 
@@ -54,18 +67,52 @@ class NavidromeData:
         if data:
             self.queue = data.get("queue", [])
             self.current_index = data.get("current_index", 0)
+            self.repeat_mode = data.get("repeat_mode", "off")
+            self.queue_dirty = data.get("queue_dirty", False)
             LOGGER.info("Restored queue: %d tracks, index %d", len(self.queue), self.current_index)
 
     async def clear_queue(self) -> None:
         """Clear the queue and persist."""
+        self.cancel_enqueue()
         self.queue = []
         self.current_index = 0
+        self.queue_dirty = False
         await self.save_queue()
 
 
 type NavidromeConfigEntry = ConfigEntry[NavidromeData]
 
 PLATFORMS = [Platform.MEDIA_PLAYER, Platform.SENSOR]
+
+
+def apply_reorder(
+    queue: list[dict[str, Any]],
+    current_index: int,
+    from_idx: int,
+    to_idx: int,
+) -> tuple[int, bool]:
+    """Reorder queue in-place; return (new_current_index, tail_changed).
+
+    tail_changed is True when at least one reordered track is after current_index,
+    meaning the upcoming play sequence has changed.
+    """
+    if from_idx == to_idx:
+        return current_index, False
+
+    track = queue.pop(from_idx)
+    queue.insert(to_idx, track)
+
+    if from_idx == current_index:
+        new_index = to_idx
+    else:
+        new_index = current_index
+        if from_idx < current_index:
+            new_index -= 1
+        if to_idx <= new_index:
+            new_index += 1
+
+    tail_changed = max(from_idx, to_idx) > new_index
+    return new_index, tail_changed
 
 
 async def async_setup_entry(
@@ -120,14 +167,13 @@ async def async_setup_entry(
         )]
     )
     from homeassistant.components.frontend import add_extra_js_url
-    add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js")
-    add_extra_js_url(hass, "/navidrome/navidrome-search-card.js")
+    add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js?v=2")
+    add_extra_js_url(hass, "/navidrome/navidrome-search-card.js?v=2")
 
     # Register clear_queue service
     async def handle_clear_queue(call: ServiceCall) -> None:
         """Handle clear_queue service call."""
         await data.clear_queue()
-        # Also clear the target player
         target = entry.options.get("target_player")
         if target:
             try:
@@ -168,6 +214,7 @@ async def async_setup_entry(
     # Register add_to_queue service
     async def handle_add_to_queue(call: ServiceCall) -> None:
         """Add a song to the current queue without replacing."""
+        from homeassistant.components.media_player import async_process_play_media_url
         song_id = call.data["song_id"]
         song = await data.client.get_song(song_id)
         track = {
@@ -182,84 +229,61 @@ async def async_setup_entry(
         data.queue.append(track)
         await data.save_queue()
 
-        # Also enqueue on target player
+        # If background worker is active it will pick up the appended track
+        # (worker iterates data.queue as a live reference). Only enqueue
+        # directly when no worker is running.
         target = entry.options.get("target_player")
-        if target:
-            from homeassistant.components.media_player import async_process_play_media_url
-            await hass.services.async_call(
-                "media_player", "play_media",
-                {
-                    "entity_id": target,
-                    "media_content_id": async_process_play_media_url(hass, track["url"]),
-                    "media_content_type": "audio/mpeg",
-                    "enqueue": "add",
-                },
-                blocking=True,
-            )
-        LOGGER.info("Added '%s' to queue", track.get("title", song_id))
-
-    # Register reorder_queue service
-    async def handle_reorder_queue(call: ServiceCall) -> None:
-        """Reorder a track in the queue."""
-        from_idx = call.data["from_index"]
-        to_idx = call.data["to_index"]
-        if from_idx < 0 or from_idx >= len(data.queue) or to_idx < 0 or to_idx >= len(data.queue):
-            LOGGER.warning("Reorder indices out of range: %d -> %d (queue size %d)", from_idx, to_idx, len(data.queue))
-            return
-        track = data.queue.pop(from_idx)
-        data.queue.insert(to_idx, track)
-        # Adjust current_index if needed
-        if data.current_index == from_idx:
-            data.current_index = to_idx
-        elif from_idx < data.current_index <= to_idx:
-            data.current_index -= 1
-        elif to_idx <= data.current_index < from_idx:
-            data.current_index += 1
-        await data.save_queue()
-
-        # Re-queue remaining tracks on target player from current position
-        target = entry.options.get("target_player")
-        if target:
-            from homeassistant.components.media_player import async_process_play_media_url
-            try:
-                await hass.services.async_call(
-                    "media_player", "media_stop",
-                    {"entity_id": target}, blocking=True,
-                )
-            except Exception:
-                pass
-            try:
-                await hass.services.async_call(
-                    "media_player", "clear_playlist",
-                    {"entity_id": target}, blocking=True,
-                )
-            except Exception:
-                pass
-            # Play from current index
-            remaining = data.queue[data.current_index:]
-            if remaining:
-                first = remaining[0]
+        if target and not (data.enqueue_task and not data.enqueue_task.done()):
+            async with data.target_lock:
                 await hass.services.async_call(
                     "media_player", "play_media",
                     {
                         "entity_id": target,
-                        "media_content_id": async_process_play_media_url(hass, first["url"]),
+                        "media_content_id": async_process_play_media_url(hass, track["url"]),
                         "media_content_type": "audio/mpeg",
+                        "enqueue": "add",
                     },
                     blocking=True,
                 )
-                for t in remaining[1:]:
-                    await hass.services.async_call(
-                        "media_player", "play_media",
-                        {
-                            "entity_id": target,
-                            "media_content_id": async_process_play_media_url(hass, t["url"]),
-                            "media_content_type": "audio/mpeg",
-                            "enqueue": "add",
-                        },
-                        blocking=True,
-                    )
-        LOGGER.info("Reordered queue: %d -> %d", from_idx, to_idx)
+        LOGGER.info("Added '%s' to queue", track.get("title", song_id))
+
+    # Register reorder_queue service
+    async def handle_reorder_queue(call: ServiceCall) -> None:
+        """Reorder a track in the queue.
+
+        Cancels the background enqueue worker (the tail is now stale) and
+        sets queue_dirty so the dirty-advance hook in the state listener
+        rebuilds the target's upcoming queue at the next track boundary.
+        """
+        from_idx = call.data["from_index"]
+        to_idx = call.data["to_index"]
+
+        if (
+            from_idx < 0 or from_idx >= len(data.queue)
+            or to_idx < 0 or to_idx >= len(data.queue)
+        ):
+            LOGGER.warning(
+                "Reorder indices out of range: %d -> %d (queue size %d)",
+                from_idx, to_idx, len(data.queue),
+            )
+            return
+
+        if from_idx == to_idx:
+            return
+
+        data.cancel_enqueue()
+
+        new_index, tail_changed = apply_reorder(
+            data.queue, data.current_index, from_idx, to_idx
+        )
+        data.current_index = new_index
+        if tail_changed:
+            data.queue_dirty = True
+
+        await data.save_queue()
+        LOGGER.info(
+            "Reordered queue: %d -> %d (dirty=%s)", from_idx, to_idx, data.queue_dirty
+        )
 
     # Register all services
     services = {
@@ -291,7 +315,7 @@ async def async_unload_entry(
     hass: HomeAssistant, entry: NavidromeConfigEntry
 ) -> bool:
     """Unload a config entry."""
-    # Save queue before unloading
+    entry.runtime_data.cancel_enqueue()
     await entry.runtime_data.save_queue()
     for svc in ("clear_queue", "save_queue_as_playlist", "add_to_playlist", "add_to_queue", "reorder_queue"):
         hass.services.async_remove(DOMAIN, svc)
