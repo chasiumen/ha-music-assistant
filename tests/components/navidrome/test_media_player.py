@@ -939,3 +939,35 @@ class TestPlaylistSearch:
         await player.async_search_media(query)
 
         assert player.client.get_playlists.call_count == 1  # cached after first call
+
+    async def test_empty_filter_classes_includes_playlists(self) -> None:
+        """The WS handler passes media_filter_classes=[] when unfiltered.
+
+        Regression test: empty list must be treated as 'no filter', not as
+        'exclude everything'.
+        """
+        player = _make_player()
+        from homeassistant.components.media_player.browse_media import SearchMediaQuery
+        player.client.search3 = AsyncMock(return_value={"song": [], "album": [], "artist": []})
+
+        query = SearchMediaQuery(search_query="Favorites", media_filter_classes=[])
+        result = await player.async_search_media(query)
+
+        playlist_results = [r for r in result.result if r.media_class.value == "playlist"]
+        assert len(playlist_results) == 1
+
+    async def test_filter_classes_without_playlist_excludes_playlists(self) -> None:
+        """An explicit filter that omits PLAYLIST excludes playlist results."""
+        player = _make_player()
+        from homeassistant.components.media_player import MediaClass
+        from homeassistant.components.media_player.browse_media import SearchMediaQuery
+        player.client.search3 = AsyncMock(return_value={"song": [], "album": [], "artist": []})
+
+        query = SearchMediaQuery(
+            search_query="Favorites", media_filter_classes=[MediaClass.TRACK]
+        )
+        result = await player.async_search_media(query)
+
+        playlist_results = [r for r in result.result if r.media_class.value == "playlist"]
+        assert len(playlist_results) == 0
+        player.client.get_playlists.assert_not_called()
