@@ -6,6 +6,8 @@ It delegates actual audio playback to a user-configured target media player.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from homeassistant.components import media_source
@@ -17,13 +19,14 @@ from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
+    RepeatMode,
     async_process_play_media_url,
 )
 from homeassistant.components.media_player.browse_media import (
     SearchMedia,
     SearchMediaQuery,
 )
-from homeassistant.const import CONF_URL, STATE_PLAYING, STATE_PAUSED, STATE_IDLE
+from homeassistant.const import CONF_URL, STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -31,9 +34,30 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from . import NavidromeConfigEntry, NavidromeData
 from .api import NavidromeClient
-from .const import CONF_SCROBBLE_ENABLED, CONF_TARGET_PLAYER, DOMAIN, LOGGER
+from .const import (
+    CONF_SCROBBLE_ENABLED,
+    CONF_TARGET_PLAYER,
+    DOMAIN,
+    LOGGER,
+    PLAYLIST_CACHE_TTL_SECONDS,
+    TARGET_STATE_GRACE_SECONDS,
+)
 
 SERVICE_PLAY_MEDIA = "play_media"
+
+_BASE_FEATURES = (
+    MediaPlayerEntityFeature.PLAY
+    | MediaPlayerEntityFeature.PAUSE
+    | MediaPlayerEntityFeature.STOP
+    | MediaPlayerEntityFeature.NEXT_TRACK
+    | MediaPlayerEntityFeature.PREVIOUS_TRACK
+    | MediaPlayerEntityFeature.VOLUME_SET
+    | MediaPlayerEntityFeature.SEARCH_MEDIA
+    | MediaPlayerEntityFeature.PLAY_MEDIA
+    | MediaPlayerEntityFeature.BROWSE_MEDIA
+    | MediaPlayerEntityFeature.MEDIA_ENQUEUE
+    | MediaPlayerEntityFeature.REPEAT_SET
+)
 
 
 async def async_setup_entry(
@@ -56,18 +80,6 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     _attr_has_entity_name = True
     _attr_name = None
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
-    _attr_supported_features = (
-        MediaPlayerEntityFeature.PLAY
-        | MediaPlayerEntityFeature.PAUSE
-        | MediaPlayerEntityFeature.STOP
-        | MediaPlayerEntityFeature.NEXT_TRACK
-        | MediaPlayerEntityFeature.PREVIOUS_TRACK
-        | MediaPlayerEntityFeature.VOLUME_SET
-        | MediaPlayerEntityFeature.SEARCH_MEDIA
-        | MediaPlayerEntityFeature.PLAY_MEDIA
-        | MediaPlayerEntityFeature.BROWSE_MEDIA
-        | MediaPlayerEntityFeature.MEDIA_ENQUEUE
-    )
     _attr_state = MediaPlayerState.IDLE
     _attr_media_content_id: str | None = None
     _attr_media_content_type: str | None = None
@@ -75,6 +87,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     _attr_media_artist: str | None = None
     _attr_media_album_name: str | None = None
     _attr_media_duration: int | None = None
+    _attr_repeat: RepeatMode = RepeatMode.OFF
     _cover_art_url: str | None = None
 
     def __init__(self, entry: NavidromeConfigEntry) -> None:
@@ -89,10 +102,31 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             configuration_url=entry.data.get(CONF_URL),
         )
         self._unsub_state_listener: callback | None = None
+        self._optimistic_deadline: float = 0.0
+        self._repeat_grace_deadline: float = 0.0
+        self._playlist_cache: list[dict[str, Any]] | None = None
+        self._playlist_cache_time: float = 0.0
+
+    @property
+    def supported_features(self) -> MediaPlayerEntityFeature:
+        """Return supported media player features."""
+        return _BASE_FEATURES
 
     async def async_added_to_hass(self) -> None:
         """Start tracking target player state."""
+        if self.data.repeat_mode and self.data.repeat_mode != "off":
+            try:
+                self._attr_repeat = RepeatMode(self.data.repeat_mode)
+            except ValueError:
+                pass
         self._setup_state_listener()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel background tasks on unload."""
+        self.data.cancel_enqueue()
+        if self._unsub_state_listener:
+            self._unsub_state_listener()
+            self._unsub_state_listener = None
 
     def _setup_state_listener(self) -> None:
         """Set up a state change listener for the target player."""
@@ -104,42 +138,66 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         if not target:
             return
 
-        @callback
-        def _handle_target_state_change(event: Event) -> None:
-            """Sync state and media metadata from target player."""
-            new_state = event.data.get("new_state")
-            if not new_state:
-                return
-
-            # Sync playback state
-            state = new_state.state
-            if state == STATE_PLAYING:
-                self._attr_state = MediaPlayerState.PLAYING
-            elif state == STATE_PAUSED:
-                self._attr_state = MediaPlayerState.PAUSED
-            else:
-                self._attr_state = MediaPlayerState.IDLE
-
-            # Sync media metadata from target player
-            attrs = new_state.attributes
-            target_title = attrs.get("media_title")
-            target_artist = attrs.get("media_artist")
-            target_duration = attrs.get("media_duration")
-
-            if target_title:
-                self._attr_media_title = target_title
-                self._attr_media_artist = target_artist
-                self._attr_media_duration = target_duration
-                self._attr_media_album_name = attrs.get("media_album_name")
-
-                # Update queue current_index to match the playing track
-                self._sync_queue_index(target_title, target_artist)
-
-            self.async_write_ha_state()
-
         self._unsub_state_listener = async_track_state_change_event(
-            self.hass, [target], _handle_target_state_change
+            self.hass, [target], self._async_target_state_changed
         )
+
+    @callback
+    def _async_target_state_changed(self, event: Event) -> None:
+        """Sync state and media metadata from the target player."""
+        new_state = event.data.get("new_state")
+        if not new_state:
+            return
+
+        state_str = new_state.state
+        if state_str in (STATE_PLAYING, "buffering"):
+            incoming = MediaPlayerState.PLAYING
+        elif state_str == STATE_PAUSED:
+            incoming = MediaPlayerState.PAUSED
+        else:
+            incoming = MediaPlayerState.IDLE
+
+        now = time.monotonic()
+        within_grace = now < self._optimistic_deadline
+
+        if within_grace:
+            if incoming == self._attr_state:
+                self._optimistic_deadline = 0.0  # confirming — clear grace
+            # contradicting — keep optimistic state; fall through to metadata sync
+        else:
+            self._attr_state = incoming
+
+        # Sync media metadata regardless of grace window
+        attrs = new_state.attributes
+        target_title = attrs.get("media_title")
+        target_artist = attrs.get("media_artist")
+
+        if target_title:
+            self._attr_media_title = target_title
+            self._attr_media_artist = target_artist
+            self._attr_media_duration = attrs.get("media_duration")
+            self._attr_media_album_name = attrs.get("media_album_name")
+            self._sync_queue_index(target_title, target_artist)
+
+        # Sync repeat from target outside repeat grace window
+        if now >= self._repeat_grace_deadline:
+            target_repeat = attrs.get("repeat")
+            if target_repeat is not None:
+                try:
+                    repeat_mode = RepeatMode(target_repeat)
+                    if repeat_mode != self._attr_repeat:
+                        self._attr_repeat = repeat_mode
+                        self.data.repeat_mode = target_repeat
+                except ValueError:
+                    pass
+
+        self.async_write_ha_state()
+
+    def _set_optimistic_state(self, state: MediaPlayerState) -> None:
+        """Set an optimistic state with a grace window to protect against stale target events."""
+        self._attr_state = state
+        self._optimistic_deadline = time.monotonic() + TARGET_STATE_GRACE_SECONDS
+        self.async_write_ha_state()
 
     @property
     def data(self) -> NavidromeData:
@@ -161,33 +219,31 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         """Return whether scrobbling is enabled."""
         return self._entry.options.get(CONF_SCROBBLE_ENABLED, False)
 
-    async def _proxy_command(self, service: str, **data: Any) -> None:
-        """Forward a media player command to the target player."""
+    async def _proxy_command(self, service: str, **kwargs: Any) -> None:
+        """Forward a media player command to the target player (lock-protected)."""
         target = self.target_player
         if not target:
             return
-        service_data = {"entity_id": target, **data}
-        await self.hass.services.async_call(
-            "media_player", service, service_data, blocking=True
-        )
+        service_data = {"entity_id": target, **kwargs}
+        async with self.data.target_lock:
+            await self.hass.services.async_call(
+                "media_player", service, service_data, blocking=True
+            )
 
     async def async_media_play(self) -> None:
         """Send play command to target player."""
+        self._set_optimistic_state(MediaPlayerState.PLAYING)
         await self._proxy_command("media_play")
-        self._attr_state = MediaPlayerState.PLAYING
-        self.async_write_ha_state()
 
     async def async_media_pause(self) -> None:
         """Send pause command to target player."""
+        self._set_optimistic_state(MediaPlayerState.PAUSED)
         await self._proxy_command("media_pause")
-        self._attr_state = MediaPlayerState.PAUSED
-        self.async_write_ha_state()
 
     async def async_media_stop(self) -> None:
         """Send stop command to target player."""
+        self._set_optimistic_state(MediaPlayerState.IDLE)
         await self._proxy_command("media_stop")
-        self._attr_state = MediaPlayerState.IDLE
-        self.async_write_ha_state()
 
     async def async_media_next_track(self) -> None:
         """Send next track command to target player."""
@@ -201,11 +257,34 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         """Set volume on target player."""
         await self._proxy_command("volume_set", volume_level=volume)
 
+    async def async_set_repeat(self, repeat: RepeatMode) -> None:
+        """Set repeat mode, persist it, and proxy to target."""
+        self._attr_repeat = repeat
+        self._repeat_grace_deadline = time.monotonic() + TARGET_STATE_GRACE_SECONDS
+        self.async_write_ha_state()
+        self.data.repeat_mode = repeat.value
+        self.hass.async_create_task(self.data.save_queue())
+        await self._async_apply_repeat_to_target()
+
+    async def _async_apply_repeat_to_target(self) -> None:
+        """Re-assert the persisted repeat mode on the target after a queue rebuild."""
+        target = self.target_player
+        if not target or self.data.repeat_mode == "off":
+            return
+        try:
+            await self.hass.services.async_call(
+                "media_player", "repeat_set",
+                {"entity_id": target, "repeat": self.data.repeat_mode},
+                blocking=True,
+            )
+        except Exception as err:
+            LOGGER.debug("Failed to re-assert repeat mode on target: %s", err)
+
     async def async_search_media(
         self,
         query: SearchMediaQuery,
     ) -> SearchMedia:
-        """Search the Navidrome library."""
+        """Search the Navidrome library (songs, albums, artists, playlists)."""
         results = await self.client.search3(
             query.search_query,
             song_count=500,
@@ -215,7 +294,6 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         items: list[BrowseMedia] = []
 
-        # Add song results
         for song in results.get("song", []):
             title = song.get("title", "Unknown")
             artist = song.get("artist", "")
@@ -234,7 +312,6 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 )
             )
 
-        # Add album results
         for album in results.get("album", []):
             name = album.get("name", "Unknown Album")
             artist = album.get("artist", "")
@@ -253,7 +330,6 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 )
             )
 
-        # Add artist results
         for artist in results.get("artist", []):
             items.append(
                 BrowseMedia(
@@ -268,6 +344,40 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     else None,
                 )
             )
+
+        # Playlist search: filter by substring on cached playlist list
+        filter_classes = getattr(query, "media_filter_classes", None)
+        include_playlists = filter_classes is None or MediaClass.PLAYLIST in filter_classes
+        if include_playlists:
+            now = time.monotonic()
+            if (
+                self._playlist_cache is None
+                or now - self._playlist_cache_time > PLAYLIST_CACHE_TTL_SECONDS
+            ):
+                try:
+                    self._playlist_cache = await self.client.get_playlists()
+                    self._playlist_cache_time = now
+                except Exception as err:
+                    LOGGER.debug("Failed to fetch playlists for search: %s", err)
+                    if self._playlist_cache is None:
+                        self._playlist_cache = []
+
+            query_lower = query.search_query.lower()
+            for playlist in self._playlist_cache:
+                if query_lower in playlist.get("name", "").lower():
+                    items.append(
+                        BrowseMedia(
+                            media_class=MediaClass.PLAYLIST,
+                            media_content_id=f"media-source://navidrome/playlist/{playlist['id']}",
+                            media_content_type=MediaType.MUSIC,
+                            title=playlist.get("name", "Unknown Playlist"),
+                            can_play=True,
+                            can_expand=True,
+                            thumbnail=self.client.cover_art_url(playlist["coverArt"])
+                            if playlist.get("coverArt")
+                            else None,
+                        )
+                    )
 
         return SearchMedia(result=items)
 
@@ -287,16 +397,14 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             )
             return
 
-        # Check if this is a song already in our queue — jump to it instead of rebuilding
+        # Song already in queue — jump to it
         queue_index = self._find_in_queue(media_id)
         if queue_index is not None:
             LOGGER.info("Song found in queue at index %d, jumping", queue_index)
             await self._play_from_queue_index(target, queue_index)
             return
 
-        # Collect all tracks to play
         tracks = await self._resolve_to_tracks(media_id)
-
         if not tracks:
             LOGGER.warning("No playable tracks found for %s", media_id)
             return
@@ -306,42 +414,34 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             len(tracks), target, tracks[0].get("title", "unknown"),
         )
 
-        # Clear the target player's queue first to avoid conflicts
-        try:
-            await self.hass.services.async_call(
-                "media_player",
-                "media_stop",
-                {"entity_id": target},
-                blocking=True,
-            )
-        except Exception:
-            pass  # Player might already be stopped
+        # Cancel any in-flight background enqueue before rebuilding the queue
+        self.data.cancel_enqueue()
 
         try:
             await self.hass.services.async_call(
-                "media_player",
-                "clear_playlist",
-                {"entity_id": target},
-                blocking=True,
+                "media_player", "media_stop", {"entity_id": target}, blocking=True,
             )
         except Exception:
-            pass  # Player might not support clear_playlist
+            pass
 
-        # Store queue in shared data for the sensor
+        try:
+            await self.hass.services.async_call(
+                "media_player", "clear_playlist", {"entity_id": target}, blocking=True,
+            )
+        except Exception:
+            pass
+
         self.data.queue = tracks
         self.data.current_index = 0
+        self.data.queue_dirty = False
         self.hass.async_create_task(self.data.save_queue())
 
-        # Update entity metadata from the first track
         first = tracks[0]
         self._update_media_attributes(first)
 
-        # Play the first track (replaces any remaining queue)
         play_data: dict[str, Any] = {
             "entity_id": target,
-            "media_content_id": async_process_play_media_url(
-                self.hass, first["url"]
-            ),
+            "media_content_id": async_process_play_media_url(self.hass, first["url"]),
             "media_content_type": "audio/mpeg",
         }
         if first.get("title") or first.get("coverArt"):
@@ -354,14 +454,9 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 else None,
             }
         await self.hass.services.async_call(
-            "media_player",
-            SERVICE_PLAY_MEDIA,
-            play_data,
-            blocking=True,
+            "media_player", SERVICE_PLAY_MEDIA, play_data, blocking=True,
         )
 
-        # Scrobble "now playing" for the first track
-        LOGGER.info("Scrobble check: enabled=%s, song_id=%s", self.scrobble_enabled, first.get("id"))
         if self.scrobble_enabled and first.get("id"):
             try:
                 await self.client.scrobble(first["id"], submission=False)
@@ -369,25 +464,16 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             except Exception as err:
                 LOGGER.error("Failed to scrobble for %s: %s", first["id"], err)
 
-        # Enqueue remaining tracks
-        for track in tracks[1:]:
-            await self.hass.services.async_call(
-                "media_player",
-                SERVICE_PLAY_MEDIA,
-                {
-                    "entity_id": target,
-                    "media_content_id": async_process_play_media_url(
-                        self.hass, track["url"]
-                    ),
-                    "media_content_type": "audio/mpeg",
-                    "enqueue": "add",
-                },
-                blocking=True,
+        # Enqueue remaining tracks in the background
+        if len(tracks) > 1:
+            self.data.enqueue_task = self.hass.async_create_task(
+                self._enqueue_worker(target, 1)
             )
 
-        self._attr_state = MediaPlayerState.PLAYING
-        self.async_write_ha_state()
-        LOGGER.info("All %d tracks queued on %s", len(tracks), target)
+        self._set_optimistic_state(MediaPlayerState.PLAYING)
+        LOGGER.info("Playing %s tracks on %s (tail enqueuing in background)", len(tracks), target)
+
+        await self._async_apply_repeat_to_target()
 
     @property
     def entity_picture(self) -> str | None:
@@ -403,21 +489,50 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._attr_media_album_name = track.get("album")
         self._attr_media_duration = track.get("duration")
         cover_art = track.get("coverArt")
-        # Use local proxy to avoid SSL issues with self-signed certs
         self._cover_art_url = (
             f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
         )
+
+    async def _enqueue_worker(self, target: str, start_index: int) -> None:
+        """Background task: enqueue data.queue[start_index:] on the target player.
+
+        Iterates the live queue list so tracks added by handle_add_to_queue are
+        automatically picked up. CancelledError propagates to stop the task.
+        """
+        i = start_index
+        while i < len(self.data.queue):
+            track = self.data.queue[i]
+            try:
+                async with self.data.target_lock:
+                    await self.hass.services.async_call(
+                        "media_player", SERVICE_PLAY_MEDIA,
+                        {
+                            "entity_id": target,
+                            "media_content_id": async_process_play_media_url(
+                                self.hass, track["url"]
+                            ),
+                            "media_content_type": "audio/mpeg",
+                            "enqueue": "add",
+                        },
+                        blocking=True,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                LOGGER.warning(
+                    "Failed to enqueue track %d (%s): %s", i, track.get("title"), err
+                )
+            i += 1
+        LOGGER.info("Enqueue worker finished: %d tracks from index %d", i - start_index, start_index)
 
     async def _resolve_to_tracks(self, media_id: str) -> list[dict[str, Any]]:
         """Resolve a media ID to a list of track dicts.
 
         Each dict has: id, url, title, artist, album, duration, coverArt
         """
-        # Direct stream URL (single song from search results)
         if not media_source.is_media_source_id(media_id):
             song_id = self._extract_song_id_from_url(media_id)
             track: dict[str, Any] = {"id": song_id, "url": media_id}
-            # Fetch metadata if we have a song ID
             if song_id:
                 try:
                     song = await self.client.get_song(song_id)
@@ -432,8 +547,6 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     LOGGER.debug("Failed to fetch metadata for %s", song_id)
             return [track]
 
-        # Parse the media-source URI to get type and ID
-        # Format: media-source://navidrome/{type}/{id}
         uri = media_id.replace("media-source://navidrome/", "")
         parts = uri.split("/", 1)
         if len(parts) != 2:
@@ -470,21 +583,16 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             entries = playlist.get("entry", [])
             return [self._song_to_track(e) for e in entries]
 
-        # Unknown type — try single resolve
         play_item = await media_source.async_resolve_media(
             self.hass, media_id, self.entity_id
         )
         return [{"id": None, "url": play_item.url}]
 
     def _find_in_queue(self, media_id: str) -> int | None:
-        """Check if a media_id matches a song in the current queue.
-
-        Returns the queue index if found, None otherwise.
-        """
+        """Return the queue index if media_id matches a song, else None."""
         if not self.data.queue:
             return None
 
-        # Extract song ID from media-source URI
         song_id = None
         if media_id.startswith("media-source://navidrome/song/"):
             song_id = media_id.replace("media-source://navidrome/song/", "")
@@ -505,43 +613,38 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         if index < 0 or index >= len(tracks):
             return
 
-        # Update current index
+        self.data.cancel_enqueue()
         self.data.current_index = index
+        self.data.queue_dirty = False
         self.hass.async_create_task(self.data.save_queue())
+
         first = tracks[index]
         self._update_media_attributes(first)
 
-        # Clear target and play from this position
         try:
             await self.hass.services.async_call(
-                "media_player", "media_stop",
-                {"entity_id": target}, blocking=True,
+                "media_player", "media_stop", {"entity_id": target}, blocking=True,
             )
         except Exception:
             pass
 
         try:
             await self.hass.services.async_call(
-                "media_player", "clear_playlist",
-                {"entity_id": target}, blocking=True,
+                "media_player", "clear_playlist", {"entity_id": target}, blocking=True,
             )
         except Exception:
             pass
 
-        # Play the selected track
         await self.hass.services.async_call(
             "media_player", SERVICE_PLAY_MEDIA,
             {
                 "entity_id": target,
-                "media_content_id": async_process_play_media_url(
-                    self.hass, first["url"]
-                ),
+                "media_content_id": async_process_play_media_url(self.hass, first["url"]),
                 "media_content_type": "audio/mpeg",
             },
             blocking=True,
         )
 
-        # Scrobble
         if self.scrobble_enabled and first.get("id"):
             try:
                 await self.client.scrobble(first["id"], submission=False)
@@ -549,27 +652,22 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             except Exception as err:
                 LOGGER.error("Failed to scrobble for %s: %s", first["id"], err)
 
-        # Enqueue remaining tracks after the selected one
-        for track in tracks[index + 1:]:
-            await self.hass.services.async_call(
-                "media_player", SERVICE_PLAY_MEDIA,
-                {
-                    "entity_id": target,
-                    "media_content_id": async_process_play_media_url(
-                        self.hass, track["url"]
-                    ),
-                    "media_content_type": "audio/mpeg",
-                    "enqueue": "add",
-                },
-                blocking=True,
+        if len(tracks) - index - 1 > 0:
+            self.data.enqueue_task = self.hass.async_create_task(
+                self._enqueue_worker(target, index + 1)
             )
 
-        self._attr_state = MediaPlayerState.PLAYING
-        self.async_write_ha_state()
+        self._set_optimistic_state(MediaPlayerState.PLAYING)
         LOGGER.info("Playing from queue index %d, %d remaining tracks", index, len(tracks) - index - 1)
 
+        await self._async_apply_repeat_to_target()
+
     def _sync_queue_index(self, title: str, artist: str | None) -> None:
-        """Update queue current_index based on the currently playing track."""
+        """Update queue current_index based on the currently playing track.
+
+        When queue_dirty, also schedules a tail-rebuild at the track boundary
+        so a pending reorder takes effect without interrupting the current track.
+        """
         LOGGER.info("Sync queue: title=%s, artist=%s", title, artist)
         found = False
         for i, track in enumerate(self.data.queue):
@@ -580,22 +678,29 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     LOGGER.info("Queue advanced to index %d: %s", i, title)
                     self.data.current_index = i
                     self.hass.async_create_task(self.data.save_queue())
-                    # Update cover art for the current track
                     cover_art = track.get("coverArt")
                     self._cover_art_url = (
                         f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
                     )
-                    # Scrobble if enabled
                     if self.scrobble_enabled and track.get("id"):
                         self.hass.async_create_task(
                             self._scrobble_track(track["id"])
                         )
+
+                    # Dirty-advance: if we reordered while music was playing,
+                    # rebuild the target's tail now that the track boundary arrived.
+                    if self.data.queue_dirty:
+                        self.data.queue_dirty = False
+                        target = self.target_player
+                        if target:
+                            self.hass.async_create_task(
+                                self._play_from_queue_index(target, i)
+                            )
                 found = True
                 break
 
         if not found and title:
             LOGGER.info("Track '%s' not found in queue, searching Navidrome", title)
-            # Track not in our queue — search Navidrome and scrobble if found
             if self.scrobble_enabled:
                 self.hass.async_create_task(
                     self._search_and_scrobble(title, artist)

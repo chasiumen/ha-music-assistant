@@ -1,19 +1,34 @@
+function esc(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 class NavidromeQueueCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
 
-    // Only re-render if queue data actually changed
     const state = hass.states[this._config?.entity];
     const newTracks = state?.attributes?.tracks;
     const newIndex = state?.attributes?.current_index;
+
+    // Also check repeat on the player entity
+    const playerEntityId = this._playerEntityId();
+    const playerState = playerEntityId ? hass.states[playerEntityId] : null;
+    const newRepeat = playerState?.attributes?.repeat ?? null;
+
     const stateChanged =
       JSON.stringify(newTracks) !== this._lastTracksJson ||
-      newIndex !== this._lastIndex;
+      newIndex !== this._lastIndex ||
+      newRepeat !== this._lastRepeat;
 
     if (stateChanged || !this._rendered) {
       this._lastTracksJson = JSON.stringify(newTracks);
       const trackChanged = this._lastIndex !== newIndex;
       this._lastIndex = newIndex;
+      this._lastRepeat = newRepeat;
       this._render(trackChanged);
     }
   }
@@ -42,19 +57,47 @@ class NavidromeQueueCard extends HTMLElement {
     };
   }
 
+  _playerEntityId() {
+    if (this._config?.player_entity) return this._config.player_entity;
+    const sensorId = this._config?.entity;
+    if (!sensorId) return null;
+    return sensorId.replace("sensor.", "media_player.").replace("_queue", "");
+  }
+
   _render(scrollToCurrent = false) {
     this._rendered = true;
     if (!this._hass || !this._config) return;
 
     const state = this._hass.states[this._config.entity];
     if (!state) {
-      this.innerHTML = `<ha-card><div class="nq-empty">Entity not found: ${this._config.entity}</div></ha-card>`;
+      this.innerHTML = `<ha-card><div class="nq-empty">Entity not found: ${esc(this._config.entity)}</div></ha-card>`;
       return;
     }
 
     const tracks = state.attributes.tracks || [];
     const total = state.attributes.total_tracks || 0;
     const currentIndex = state.attributes.current_index || 0;
+
+    const playerEntityId = this._playerEntityId();
+    const playerState = playerEntityId ? this._hass.states[playerEntityId] : null;
+    const repeat = playerState?.attributes?.repeat ?? null;
+
+    // Repeat button: only show when the player exposes a repeat attribute
+    let repeatBtnHtml = "";
+    if (repeat !== null) {
+      const repeatIcons = {
+        off: "mdi:repeat-off",
+        all: "mdi:repeat",
+        one: "mdi:repeat-once",
+      };
+      const icon = repeatIcons[repeat] || "mdi:repeat-off";
+      const active = repeat !== "off";
+      repeatBtnHtml = `<ha-icon
+          class="nq-repeat-btn ${active ? "nq-repeat-active" : ""}"
+          icon="${esc(icon)}"
+          title="Repeat: ${esc(repeat)}"
+        ></ha-icon>`;
+    }
 
     const trackRows = tracks
       .map((track) => {
@@ -68,10 +111,10 @@ class NavidromeQueueCard extends HTMLElement {
           <div class="nq-drag-handle" title="Drag to reorder">⠿</div>
           <div class="nq-index">${isCurrent ? "▶" : track.index}</div>
           <div class="nq-info">
-            <div class="nq-title">${track.title || "Unknown"}</div>
-            <div class="nq-artist">${track.artist || "Unknown"}</div>
+            <div class="nq-title">${esc(track.title) || "Unknown"}</div>
+            <div class="nq-artist">${esc(track.artist) || "Unknown"}</div>
           </div>
-          <div class="nq-duration">${duration}</div>
+          <div class="nq-duration">${esc(duration)}</div>
           <div class="nq-play-btn" data-track-index="${track.index}" title="Play this track">▶</div>
         </div>`;
       })
@@ -80,9 +123,10 @@ class NavidromeQueueCard extends HTMLElement {
     this.innerHTML = `
       <ha-card>
         <div class="nq-header">
-          <span class="nq-title-text">${this._config.title}</span>
+          <span class="nq-title-text">${esc(this._config.title)}</span>
           <div class="nq-header-right">
-            <span class="nq-count">${currentIndex}/${total}</span>
+            <span class="nq-count">${esc(currentIndex)}/${esc(total)}</span>
+            ${repeatBtnHtml}
             <span class="nq-clear-btn" title="Clear queue">🗑</span>
           </div>
         </div>
@@ -109,6 +153,19 @@ class NavidromeQueueCard extends HTMLElement {
         .nq-count {
           font-size: 0.85em;
           opacity: 0.7;
+        }
+        .nq-repeat-btn {
+          cursor: pointer;
+          opacity: 0.3;
+          transition: opacity 0.2s;
+          --mdc-icon-size: 20px;
+        }
+        .nq-repeat-btn:hover {
+          opacity: 0.7;
+        }
+        .nq-repeat-btn.nq-repeat-active {
+          opacity: 1;
+          color: var(--primary-color);
         }
         .nq-clear-btn {
           cursor: pointer;
@@ -230,7 +287,6 @@ class NavidromeQueueCard extends HTMLElement {
           padding: 16px;
           opacity: 0.5;
         }
-        /* Scrollbar styling */
         .nq-list::-webkit-scrollbar {
           width: 6px;
         }
@@ -247,7 +303,6 @@ class NavidromeQueueCard extends HTMLElement {
       </style>
     `;
 
-    // Only scroll to current track when it actually changes
     if (scrollToCurrent) {
       requestAnimationFrame(() => {
         const current = this.querySelector(".nq-current");
@@ -257,7 +312,6 @@ class NavidromeQueueCard extends HTMLElement {
       });
     }
 
-    // Add click handlers for play buttons
     this.querySelectorAll(".nq-play-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -266,7 +320,6 @@ class NavidromeQueueCard extends HTMLElement {
       });
     });
 
-    // Add click handler for track rows
     this.querySelectorAll(".nq-track:not(.nq-current)").forEach((row) => {
       row.addEventListener("click", () => {
         const trackIndex = parseInt(row.dataset.index) - 1;
@@ -274,7 +327,6 @@ class NavidromeQueueCard extends HTMLElement {
       });
     });
 
-    // Clear queue button
     const clearBtn = this.querySelector(".nq-clear-btn");
     if (clearBtn) {
       clearBtn.addEventListener("click", (e) => {
@@ -283,11 +335,18 @@ class NavidromeQueueCard extends HTMLElement {
       });
     }
 
-    // Drag-to-reorder handlers
+    const repeatBtn = this.querySelector(".nq-repeat-btn");
+    if (repeatBtn) {
+      repeatBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._cycleRepeat();
+      });
+    }
+
     let dragFromIndex = null;
     this.querySelectorAll(".nq-track[draggable]").forEach((row) => {
       row.addEventListener("dragstart", (e) => {
-        dragFromIndex = parseInt(row.dataset.index) - 1; // Convert to 0-based
+        dragFromIndex = parseInt(row.dataset.index) - 1;
         row.classList.add("nq-dragging");
         e.dataTransfer.effectAllowed = "move";
       });
@@ -302,7 +361,6 @@ class NavidromeQueueCard extends HTMLElement {
       row.addEventListener("dragover", (e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        // Clear previous drag-over highlights
         this.querySelectorAll(".nq-drag-over").forEach((el) =>
           el.classList.remove("nq-drag-over")
         );
@@ -316,7 +374,7 @@ class NavidromeQueueCard extends HTMLElement {
       row.addEventListener("drop", (e) => {
         e.preventDefault();
         row.classList.remove("nq-drag-over");
-        const dragToIndex = parseInt(row.dataset.index) - 1; // Convert to 0-based
+        const dragToIndex = parseInt(row.dataset.index) - 1;
         if (dragFromIndex !== null && dragFromIndex !== dragToIndex) {
           this._reorderTrack(dragFromIndex, dragToIndex);
         }
@@ -334,20 +392,24 @@ class NavidromeQueueCard extends HTMLElement {
     const tracks = state.attributes.tracks || [];
     if (index < 0 || index >= tracks.length) return;
 
-    // Find the navidrome media_player entity to send play_media
-    // Derive from the sensor entity name
-    const sensorId = this._config.entity;
-    const playerEntity =
-      this._config.player_entity ||
-      sensorId.replace("sensor.", "media_player.").replace("_queue", "");
-
     const track = tracks[index];
     if (!track.song_id) return;
 
     this._hass.callService("media_player", "play_media", {
-      entity_id: playerEntity,
+      entity_id: this._playerEntityId(),
       media_content_id: `media-source://navidrome/song/${track.song_id}`,
       media_content_type: "music",
+    });
+  }
+
+  _cycleRepeat() {
+    if (!this._hass) return;
+    const cycle = { off: "all", all: "one", one: "off" };
+    const current = this._lastRepeat || "off";
+    const next = cycle[current] || "off";
+    this._hass.callService("media_player", "repeat_set", {
+      entity_id: this._playerEntityId(),
+      repeat: next,
     });
   }
 
@@ -371,5 +433,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "navidrome-queue-card",
   name: "Navidrome Queue",
-  description: "Shows the current Navidrome playback queue with scrolling and click-to-play",
+  description: "Shows the current Navidrome playback queue with scrolling, click-to-play, and repeat controls",
 });

@@ -36,7 +36,7 @@ class TestSaveQueue:
     """Test save_queue method."""
 
     async def test_save_persists_queue_and_index(self) -> None:
-        """Test save_queue writes queue and current_index to store."""
+        """Test save_queue writes queue, current_index, repeat_mode, and queue_dirty to store."""
         tracks = [
             {"id": "tr-1", "title": "Track A"},
             {"id": "tr-2", "title": "Track B"},
@@ -48,6 +48,8 @@ class TestSaveQueue:
         data.store.async_save.assert_called_once_with({
             "queue": tracks,
             "current_index": 1,
+            "repeat_mode": "off",
+            "queue_dirty": False,
         })
 
     async def test_save_empty_queue(self) -> None:
@@ -59,6 +61,8 @@ class TestSaveQueue:
         data.store.async_save.assert_called_once_with({
             "queue": [],
             "current_index": 0,
+            "repeat_mode": "off",
+            "queue_dirty": False,
         })
 
     async def test_save_no_store(self) -> None:
@@ -72,7 +76,25 @@ class TestLoadQueue:
     """Test load_queue method."""
 
     async def test_load_restores_queue(self) -> None:
-        """Test load_queue restores queue from store."""
+        """Test load_queue restores queue and all persisted fields from store."""
+        tracks = [{"id": "tr-1", "title": "Track A"}]
+        data = _make_data()
+        data.store.async_load = AsyncMock(return_value={
+            "queue": tracks,
+            "current_index": 0,
+            "repeat_mode": "all",
+            "queue_dirty": True,
+        })
+
+        await data.load_queue()
+
+        assert data.queue == tracks
+        assert data.current_index == 0
+        assert data.repeat_mode == "all"
+        assert data.queue_dirty is True
+
+    async def test_load_restores_queue_old_format(self) -> None:
+        """Test load_queue defaults new fields gracefully when absent (old persisted data)."""
         tracks = [{"id": "tr-1", "title": "Track A"}]
         data = _make_data()
         data.store.async_load = AsyncMock(return_value={
@@ -83,7 +105,8 @@ class TestLoadQueue:
         await data.load_queue()
 
         assert data.queue == tracks
-        assert data.current_index == 0
+        assert data.repeat_mode == "off"
+        assert data.queue_dirty is False
 
     async def test_load_empty_store(self) -> None:
         """Test load_queue with no stored data."""
@@ -174,3 +197,38 @@ class TestDispatcherSignaling:
             await data.clear_queue()
 
             mock_dispatch.assert_called_once()
+
+
+class TestCancelEnqueue:
+    """Test the cancel_enqueue helper on NavidromeData."""
+
+    def test_cancel_running_task(self) -> None:
+        """cancel_enqueue cancels a running task and clears it."""
+        import asyncio
+        data = _make_data()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = False
+        data.enqueue_task = mock_task
+
+        data.cancel_enqueue()
+
+        mock_task.cancel.assert_called_once()
+        assert data.enqueue_task is None
+
+    def test_cancel_completed_task(self) -> None:
+        """cancel_enqueue does not cancel an already-done task."""
+        import asyncio
+        data = _make_data()
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.done.return_value = True
+        data.enqueue_task = mock_task
+
+        data.cancel_enqueue()
+
+        mock_task.cancel.assert_not_called()
+        assert data.enqueue_task is None
+
+    def test_cancel_no_task(self) -> None:
+        """cancel_enqueue is a no-op when no task is set."""
+        data = _make_data()
+        data.cancel_enqueue()  # Should not raise

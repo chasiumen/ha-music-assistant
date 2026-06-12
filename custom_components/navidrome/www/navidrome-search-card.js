@@ -1,7 +1,14 @@
+function esc(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 class NavidromeSearchCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
-    // Don't re-render on every hass update — only on first load
     if (!this._rendered) {
       this._render();
     }
@@ -19,6 +26,7 @@ class NavidromeSearchCard extends HTMLElement {
       max_songs: config.max_songs || 20,
       max_albums: config.max_albums || 10,
       max_artists: config.max_artists || 5,
+      max_playlists: config.max_playlists || 5,
       ...config,
     };
     this._searchResults = null;
@@ -43,10 +51,10 @@ class NavidromeSearchCard extends HTMLElement {
     this.innerHTML = `
       <ha-card>
         <div class="ns-header">
-          <span class="ns-title">${this._config.title}</span>
+          <span class="ns-title">${esc(this._config.title)}</span>
         </div>
         <div class="ns-search-box">
-          <input type="text" class="ns-input" placeholder="Search songs, artists, albums..." />
+          <input type="text" class="ns-input" placeholder="Search songs, artists, albums, playlists..." />
         </div>
         <div class="ns-results" style="max-height: ${this._config.max_height}px; overflow-y: auto;">
           <div class="ns-empty">Type to search your Navidrome library</div>
@@ -211,7 +219,6 @@ class NavidromeSearchCard extends HTMLElement {
       </style>
     `;
 
-    // Search input handler with debounce
     const input = this.querySelector(".ns-input");
     input.addEventListener("input", () => {
       clearTimeout(this._searchTimeout);
@@ -224,7 +231,6 @@ class NavidromeSearchCard extends HTMLElement {
       this._searchTimeout = setTimeout(() => this._doSearch(query), this._config.debounce_ms);
     });
 
-    // Close any open dropdowns on click outside
     document.addEventListener("click", () => {
       const dd = this.querySelector(".ns-playlist-dropdown");
       if (dd) dd.remove();
@@ -244,7 +250,7 @@ class NavidromeSearchCard extends HTMLElement {
       this._searchResults = result?.result || [];
       this._renderResults();
     } catch (err) {
-      this._showEmpty(`Search failed: ${err.message || "unknown error"}`);
+      this._showEmpty(`Search failed: ${esc(err.message || "unknown error")}`);
     }
   }
 
@@ -258,16 +264,16 @@ class NavidromeSearchCard extends HTMLElement {
       return;
     }
 
-    // Categorize results
     const songs = results.filter((r) => r.media_class === "track").slice(0, this._config.max_songs);
     const albums = results.filter((r) => r.media_class === "album").slice(0, this._config.max_albums);
     const artists = results.filter((r) => r.media_class === "artist").slice(0, this._config.max_artists);
+    const playlists = results.filter((r) => r.media_class === "playlist").slice(0, this._config.max_playlists);
 
     let html = "";
 
     if (songs.length > 0) {
       html += `<div class="ns-section-title">Songs (${songs.length})</div>`;
-      html += songs.map((s, i) => this._renderSongItem(s, i)).join("");
+      html += songs.map((s) => this._renderSongItem(s)).join("");
     }
 
     if (albums.length > 0) {
@@ -280,20 +286,25 @@ class NavidromeSearchCard extends HTMLElement {
       html += artists.map((a) => this._renderArtistItem(a)).join("");
     }
 
+    if (playlists.length > 0) {
+      html += `<div class="ns-section-title">Playlists (${playlists.length})</div>`;
+      html += playlists.map((p) => this._renderPlaylistItem(p)).join("");
+    }
+
     container.innerHTML = html;
     this._attachResultHandlers();
   }
 
-  _renderSongItem(song, index) {
+  _renderSongItem(song) {
     const thumb = song.thumbnail
-      ? `<img class="ns-item-thumb" src="${song.thumbnail}" loading="lazy" />`
+      ? `<img class="ns-item-thumb" src="${esc(song.thumbnail)}" loading="lazy" />`
       : '<div class="ns-item-thumb"></div>';
 
     return `
-      <div class="ns-item" data-content-id="${song.media_content_id}" data-type="song">
+      <div class="ns-item" data-content-id="${esc(song.media_content_id)}" data-type="song">
         ${thumb}
         <div class="ns-item-info">
-          <div class="ns-item-title">${song.title || "Unknown"}</div>
+          <div class="ns-item-title">${esc(song.title) || "Unknown"}</div>
         </div>
         <div class="ns-actions">
           <button class="ns-action-btn ns-play" title="Play now">▶</button>
@@ -305,14 +316,14 @@ class NavidromeSearchCard extends HTMLElement {
 
   _renderAlbumItem(album) {
     const thumb = album.thumbnail
-      ? `<img class="ns-item-thumb" src="${album.thumbnail}" loading="lazy" />`
+      ? `<img class="ns-item-thumb" src="${esc(album.thumbnail)}" loading="lazy" />`
       : '<div class="ns-item-thumb"></div>';
 
     return `
-      <div class="ns-item" data-content-id="${album.media_content_id}" data-type="album">
+      <div class="ns-item" data-content-id="${esc(album.media_content_id)}" data-type="album">
         ${thumb}
         <div class="ns-item-info">
-          <div class="ns-item-title">${album.title || "Unknown"}</div>
+          <div class="ns-item-title">${esc(album.title) || "Unknown"}</div>
           <div class="ns-item-subtitle">Album</div>
         </div>
         <div class="ns-actions">
@@ -324,21 +335,38 @@ class NavidromeSearchCard extends HTMLElement {
 
   _renderArtistItem(artist) {
     const thumb = artist.thumbnail
-      ? `<img class="ns-item-thumb" src="${artist.thumbnail}" loading="lazy" />`
+      ? `<img class="ns-item-thumb" src="${esc(artist.thumbnail)}" loading="lazy" />`
       : '<div class="ns-item-thumb"></div>';
 
     return `
-      <div class="ns-item" data-content-id="${artist.media_content_id}" data-type="artist">
+      <div class="ns-item" data-content-id="${esc(artist.media_content_id)}" data-type="artist">
         ${thumb}
         <div class="ns-item-info">
-          <div class="ns-item-title">${artist.title || "Unknown"}</div>
+          <div class="ns-item-title">${esc(artist.title) || "Unknown"}</div>
           <div class="ns-item-subtitle">Artist</div>
         </div>
       </div>`;
   }
 
+  _renderPlaylistItem(playlist) {
+    const thumb = playlist.thumbnail
+      ? `<img class="ns-item-thumb" src="${esc(playlist.thumbnail)}" loading="lazy" />`
+      : '<div class="ns-item-thumb"></div>';
+
+    return `
+      <div class="ns-item" data-content-id="${esc(playlist.media_content_id)}" data-type="playlist">
+        ${thumb}
+        <div class="ns-item-info">
+          <div class="ns-item-title">${esc(playlist.title) || "Unknown"}</div>
+          <div class="ns-item-subtitle">Playlist</div>
+        </div>
+        <div class="ns-actions">
+          <button class="ns-action-btn ns-play" title="Play playlist">▶</button>
+        </div>
+      </div>`;
+  }
+
   _attachResultHandlers() {
-    // Play buttons
     this.querySelectorAll(".ns-play").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -352,13 +380,11 @@ class NavidromeSearchCard extends HTMLElement {
       });
     });
 
-    // Add to queue buttons
     this.querySelectorAll(".ns-add-queue").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const item = btn.closest(".ns-item");
         const contentId = item.dataset.contentId;
-        // Extract song ID from stream URL or media-source URI
         const songId = this._extractSongId(contentId);
         if (songId) {
           this._hass.callService("navidrome", "add_to_queue", { song_id: songId });
@@ -368,7 +394,6 @@ class NavidromeSearchCard extends HTMLElement {
       });
     });
 
-    // Add to playlist buttons
     this.querySelectorAll(".ns-add-playlist").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -383,11 +408,9 @@ class NavidromeSearchCard extends HTMLElement {
   }
 
   _extractSongId(contentId) {
-    // From media-source URI: media-source://navidrome/song/{id}
     if (contentId.includes("media-source://navidrome/song/")) {
       return contentId.replace("media-source://navidrome/song/", "");
     }
-    // From stream URL: ...?id={id}&...
     try {
       const url = new URL(contentId);
       return url.searchParams.get("id");
@@ -397,17 +420,19 @@ class NavidromeSearchCard extends HTMLElement {
   }
 
   async _showPlaylistDropdown(btn, songId) {
-    // Remove any existing dropdown
     const existing = this.querySelector(".ns-playlist-dropdown");
     if (existing) existing.remove();
 
-    // Fetch playlists if not cached
     if (!this._playlistCache) {
       try {
-        const state = this._hass.states[this._config.entity];
-        // We'll fetch playlists by browsing the media source
-        // For now, use a simple dropdown with "New Playlist" option
-        this._playlistCache = []; // TODO: fetch from browse
+        const result = await this._hass.callWS({
+          type: "media_player/search_media",
+          entity_id: this._config.entity,
+          search_query: " ",
+        });
+        // Extract playlists from search results (empty query returns cached list)
+        this._playlistCache = (result?.result || [])
+          .filter((r) => r.media_class === "playlist");
       } catch {
         this._playlistCache = [];
       }
@@ -416,27 +441,39 @@ class NavidromeSearchCard extends HTMLElement {
     const dropdown = document.createElement("div");
     dropdown.className = "ns-playlist-dropdown";
 
-    // New playlist option
-    dropdown.innerHTML = `
-      <div class="ns-playlist-option ns-new-playlist" data-action="new">
-        + New Playlist...
-      </div>
-    `;
+    let optionsHtml = this._playlistCache.map((p) =>
+      `<div class="ns-playlist-option" data-playlist-id="${esc(p.media_content_id)}">${esc(p.title)}</div>`
+    ).join("");
+
+    optionsHtml += `<div class="ns-playlist-option ns-new-playlist" data-action="new">+ New Playlist...</div>`;
+    dropdown.innerHTML = optionsHtml;
 
     btn.closest(".ns-item").appendChild(dropdown);
 
-    // Handle new playlist click
+    dropdown.querySelectorAll("[data-playlist-id]").forEach((opt) => {
+      opt.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const playlistId = opt.dataset.playlistId.replace("media-source://navidrome/playlist/", "");
+        this._hass.callService("navidrome", "add_to_playlist", {
+          playlist_id: playlistId,
+          song_id: songId,
+        });
+        dropdown.remove();
+      });
+    });
+
     dropdown.querySelector('[data-action="new"]').addEventListener("click", (e) => {
       e.stopPropagation();
       const name = prompt("Enter playlist name:");
       if (name) {
-        this._hass.callService("navidrome", "save_queue_as_playlist", { name });
-        // TODO: create playlist with just this song instead of queue
+        this._hass.callService("navidrome", "add_to_playlist", {
+          playlist_id: "__new__:" + name,
+          song_id: songId,
+        });
       }
       dropdown.remove();
     });
 
-    // Close on next click
     setTimeout(() => {
       const handler = () => {
         dropdown.remove();
@@ -449,7 +486,12 @@ class NavidromeSearchCard extends HTMLElement {
   _showEmpty(message) {
     const container = this.querySelector(".ns-results");
     if (container) {
-      container.innerHTML = `<div class="ns-empty">${message}</div>`;
+      // message comes from our own code or an escaped error string, safe to set as text
+      const div = document.createElement("div");
+      div.className = "ns-empty";
+      div.textContent = message;
+      container.innerHTML = "";
+      container.appendChild(div);
     }
   }
 
