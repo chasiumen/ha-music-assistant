@@ -15,6 +15,7 @@ from homeassistant.components.media_player import (
     BrowseMedia,
     MediaClass,
     MediaPlayerDeviceClass,
+    MediaPlayerEnqueue,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -399,6 +400,13 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             )
             return
 
+        # enqueue=add appends to the existing queue without interrupting
+        # playback. With an empty queue there is nothing to append to, so
+        # fall through and play normally.
+        if kwargs.get("enqueue") == MediaPlayerEnqueue.ADD and self.data.queue:
+            await self._async_append_to_queue(target, media_id)
+            return
+
         # Song already in queue — jump to it
         queue_index = self._find_in_queue(media_id)
         if queue_index is not None:
@@ -476,6 +484,39 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         LOGGER.info("Playing %s tracks on %s (tail enqueuing in background)", len(tracks), target)
 
         await self._async_apply_repeat_to_target()
+
+    async def _async_append_to_queue(self, target: str, media_id: str) -> None:
+        """Append a song, album or playlist to the end of the queue.
+
+        Playback is not interrupted. The new tracks reach the target via the
+        background enqueue worker:
+        - worker already running: it iterates the live queue and picks them up;
+        - reorder pending (queue_dirty): the tail rebuild at the next track
+          boundary re-enqueues everything after the current track, including
+          the new tracks, so enqueueing now would only duplicate them;
+        - otherwise: start a worker from the first appended track.
+        """
+        tracks = await self._resolve_to_tracks(media_id)
+        if not tracks:
+            LOGGER.warning("No playable tracks found for %s", media_id)
+            return
+
+        start_index = len(self.data.queue)
+        self.data.queue.extend(tracks)
+        self.hass.async_create_task(self.data.save_queue())
+
+        worker_running = (
+            self.data.enqueue_task is not None and not self.data.enqueue_task.done()
+        )
+        if not worker_running and not self.data.queue_dirty:
+            self.data.enqueue_task = self.hass.async_create_task(
+                self._enqueue_worker(target, start_index)
+            )
+
+        LOGGER.info(
+            "Appended %d tracks from %s to queue (now %d tracks)",
+            len(tracks), media_id, len(self.data.queue),
+        )
 
     @property
     def entity_picture(self) -> str | None:
