@@ -15,8 +15,12 @@ from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    ServiceValidationError,
+)
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
@@ -41,9 +45,11 @@ from .const import (
     SERVICE_ADD_TO_PLAYLIST,
     SERVICE_ADD_TO_QUEUE,
     SERVICE_CLEAR_QUEUE,
+    SERVICE_REMOVE_FROM_QUEUE,
     SERVICE_REORDER_QUEUE,
     SERVICE_SAVE_QUEUE_AS_PLAYLIST,
     SERVER_INFO_REFRESH_INTERVAL,
+    SIGNAL_PLAY_QUEUE_INDEX,
     SIGNAL_QUEUE_UPDATED,
     SIGNAL_SERVER_INFO_UPDATED,
 )
@@ -64,6 +70,10 @@ SERVICE_SCHEMAS: dict[str, vol.Schema] = {
     SERVICE_REORDER_QUEUE: vol.Schema({
         vol.Required("from_index"): int,
         vol.Required("to_index"): int,
+    }),
+    SERVICE_REMOVE_FROM_QUEUE: vol.Schema({
+        vol.Required("indices"): vol.All(cv.ensure_list, [vol.Coerce(int)]),
+        vol.Optional("song_ids"): vol.All(cv.ensure_list, [cv.string]),
     }),
 }
 
@@ -122,6 +132,60 @@ class NavidromeData:
         self.queue_dirty = False
         await self.save_queue()
 
+    async def remove_tracks(
+        self, indices: list[int], song_ids: list[str] | None = None
+    ) -> int | None:
+        """Remove tracks by 0-based position and persist.
+
+        ``song_ids`` (one per index) guards against a stale UI: a position
+        whose track ID doesn't match is skipped instead of removing the
+        wrong song.
+
+        Returns the position to continue playback from when the current
+        track was removed (``len(queue)`` = nothing left after it), else
+        None. Removing an upcoming track marks the queue dirty so the
+        target's tail is rebuilt at the next track boundary.
+        """
+        valid: list[int] = []
+        for pos, index in enumerate(indices):
+            if not 0 <= index < len(self.queue):
+                LOGGER.warning(
+                    "Remove from queue: index %d out of range (queue size %d)",
+                    index, len(self.queue),
+                )
+                continue
+            if song_ids is not None and self.queue[index].get("id") != song_ids[pos]:
+                LOGGER.warning(
+                    "Remove from queue: track at %d is %s, not %s; skipped "
+                    "(queue changed since the card rendered?)",
+                    index, self.queue[index].get("id"), song_ids[pos],
+                )
+                continue
+            valid.append(index)
+        if not valid:
+            return None
+
+        new_index, removed_current, tail_changed = apply_remove(
+            self.queue, self.current_index, valid
+        )
+        play_index: int | None = None
+        if removed_current:
+            # The media player restarts the target from new_index, which
+            # rebuilds the whole tail, so no deferred rebuild is needed.
+            self.cancel_enqueue()
+            self.queue_dirty = False
+            play_index = new_index
+        elif tail_changed:
+            self.cancel_enqueue()
+            self.queue_dirty = True
+        self.current_index = min(new_index, max(len(self.queue) - 1, 0))
+        await self.save_queue()
+        LOGGER.info(
+            "Removed %d track(s) from queue (now %d, current %d, dirty=%s)",
+            len(valid), len(self.queue), self.current_index, self.queue_dirty,
+        )
+        return play_index
+
 
 type NavidromeConfigEntry = ConfigEntry[NavidromeData]
 
@@ -156,6 +220,27 @@ def apply_reorder(
 
     tail_changed = max(from_idx, to_idx) > new_index
     return new_index, tail_changed
+
+
+def apply_remove(
+    queue: list[dict[str, Any]],
+    current_index: int,
+    indices: list[int],
+) -> tuple[int, bool, bool]:
+    """Remove tracks in place; return (new_current_index, removed_current, tail_changed).
+
+    Out-of-range and duplicate indices are ignored. When the current track is
+    removed, new_current_index points at the track that followed it, which
+    equals len(queue) if nothing followed. tail_changed is True when an
+    upcoming track (after current_index) was removed.
+    """
+    to_remove = sorted({i for i in indices if 0 <= i < len(queue)}, reverse=True)
+    removed_current = current_index in to_remove
+    tail_changed = any(i > current_index for i in to_remove)
+    removed_before = sum(1 for i in to_remove if i < current_index)
+    for i in to_remove:
+        del queue[i]
+    return current_index - removed_before, removed_current, tail_changed
 
 
 async def async_setup_entry(
@@ -327,6 +412,21 @@ async def async_setup_entry(
             "Reordered queue: %d -> %d (dirty=%s)", from_idx, to_idx, data.queue_dirty
         )
 
+    # Register remove_from_queue service
+    async def handle_remove_from_queue(call: ServiceCall) -> None:
+        """Remove tracks from the queue by position."""
+        indices = call.data["indices"]
+        song_ids = call.data.get("song_ids")
+        if song_ids is not None and len(song_ids) != len(indices):
+            raise ServiceValidationError(
+                "song_ids must contain one song ID per index"
+            )
+        play_index = await data.remove_tracks(indices, song_ids)
+        if play_index is not None:
+            async_dispatcher_send(
+                hass, f"{SIGNAL_PLAY_QUEUE_INDEX}_{entry.entry_id}", play_index
+            )
+
     # Register all services
     handlers = {
         SERVICE_CLEAR_QUEUE: handle_clear_queue,
@@ -334,6 +434,7 @@ async def async_setup_entry(
         SERVICE_ADD_TO_PLAYLIST: handle_add_to_playlist,
         SERVICE_ADD_TO_QUEUE: handle_add_to_queue,
         SERVICE_REORDER_QUEUE: handle_reorder_queue,
+        SERVICE_REMOVE_FROM_QUEUE: handle_remove_from_queue,
     }
     for name, schema in SERVICE_SCHEMAS.items():
         if not hass.services.has_service(DOMAIN, name):

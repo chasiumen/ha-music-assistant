@@ -82,7 +82,11 @@ SERVICE_SAVE_QUEUE_AS_PLAYLIST = "save_queue_as_playlist"
 SERVICE_ADD_TO_PLAYLIST = "add_to_playlist"
 SERVICE_ADD_TO_QUEUE = "add_to_queue"
 SERVICE_REORDER_QUEUE = "reorder_queue"
+SERVICE_REMOVE_FROM_QUEUE = "remove_from_queue"
 
 # -- Dispatcher signals (suffixed with _<entry_id>) --
 SIGNAL_QUEUE_UPDATED = f"{DOMAIN}_queue_updated"
 SIGNAL_SERVER_INFO_UPDATED = f"{DOMAIN}_server_info_updated"
+# Ask the media player to play the queue from an index (arg: int). Sent when
+# the playing track is removed; an index past the end means "stop".
+SIGNAL_PLAY_QUEUE_INDEX = f"{DOMAIN}_play_queue_index"
