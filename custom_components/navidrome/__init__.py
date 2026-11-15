@@ -168,7 +168,7 @@ async def async_setup_entry(
     )
     from homeassistant.components.frontend import add_extra_js_url
     add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js?v=2")
-    add_extra_js_url(hass, "/navidrome/navidrome-search-card.js?v=2")
+    add_extra_js_url(hass, "/navidrome/navidrome-search-card.js?v=3")
 
     # Register clear_queue service
     async def handle_clear_queue(call: ServiceCall) -> None:

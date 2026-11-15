@@ -362,6 +362,7 @@ class NavidromeSearchCard extends HTMLElement {
         </div>
         <div class="ns-actions">
           <button class="ns-action-btn ns-play" title="Play playlist">▶</button>
+          <button class="ns-action-btn ns-secondary ns-add-queue" title="Add to queue">➕</button>
         </div>
       </div>`;
   }
@@ -381,15 +382,29 @@ class NavidromeSearchCard extends HTMLElement {
     });
 
     this.querySelectorAll(".ns-add-queue").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
+      btn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const item = btn.closest(".ns-item");
         const contentId = item.dataset.contentId;
-        const songId = this._extractSongId(contentId);
-        if (songId) {
-          this._hass.callService("navidrome", "add_to_queue", { song_id: songId });
-          btn.textContent = "✓";
-          setTimeout(() => { btn.textContent = "➕"; }, 1500);
+        try {
+          if (item.dataset.type === "song") {
+            const songId = this._extractSongId(contentId);
+            if (!songId) throw new Error(`No song id in ${contentId}`);
+            await this._hass.callService("navidrome", "add_to_queue", { song_id: songId });
+          } else {
+            // Albums and playlists: the media player resolves them to tracks
+            // and appends them without interrupting playback.
+            await this._hass.callService("media_player", "play_media", {
+              entity_id: this._config.entity,
+              media_content_id: contentId,
+              media_content_type: "music",
+              enqueue: "add",
+            });
+          }
+          this._flashButton(btn, "✓");
+        } catch (err) {
+          console.error("navidrome-search-card: add to queue failed", err);
+          this._flashButton(btn, "✗");
         }
       });
     });
@@ -405,6 +420,11 @@ class NavidromeSearchCard extends HTMLElement {
         }
       });
     });
+  }
+
+  _flashButton(btn, text) {
+    btn.textContent = text;
+    setTimeout(() => { btn.textContent = "➕"; }, 1500);
   }
 
   _extractSongId(contentId) {

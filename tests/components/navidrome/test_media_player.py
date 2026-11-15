@@ -7,6 +7,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from homeassistant.components.media_player import MediaPlayerEnqueue
+
 from custom_components.navidrome import NavidromeData, apply_reorder
 from custom_components.navidrome.media_player import NavidromeMediaPlayer
 
@@ -246,6 +248,112 @@ class TestQueueStorage:
         await player.async_play_media("music", "media-source://navidrome/song/tr-1")
 
         player.hass.services.async_call.assert_not_called()
+
+
+class TestEnqueueAdd:
+    """Test play_media with enqueue=add (append without replacing the queue)."""
+
+    EXISTING = {"id": "tr-0", "url": "http://a/0", "title": "Already Playing"}
+
+    def _player_with_queue(self) -> NavidromeMediaPlayer:
+        player = _make_player()
+        player.async_write_ha_state = MagicMock()
+        player.data.queue = [dict(self.EXISTING)]
+        player.data.current_index = 0
+        # Patch the worker so we can assert how (and whether) it is started
+        player._enqueue_worker = MagicMock(return_value="worker-sentinel")
+        return player
+
+    async def test_album_appended_without_interrupting_playback(self) -> None:
+        """Album tracks are appended; current track and index are untouched."""
+        player = self._player_with_queue()
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/album/al-1",
+            enqueue=MediaPlayerEnqueue.ADD,
+        )
+
+        assert [t["title"] for t in player.data.queue] == [
+            "Already Playing", "Come Together", "Something",
+        ]
+        assert player.data.current_index == 0
+        # No stop / clear_playlist / play_media on the target — the worker
+        # (patched here) is the only thing that talks to the target.
+        player.hass.services.async_call.assert_not_called()
+        player._enqueue_worker.assert_called_once_with("media_player.test_speaker", 1)
+        assert player.data.enqueue_task == player.hass.async_create_task.return_value
+
+    async def test_playlist_appended(self) -> None:
+        """Playlist entries are appended to the end of the queue."""
+        player = self._player_with_queue()
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/playlist/pl-1",
+            enqueue=MediaPlayerEnqueue.ADD,
+        )
+
+        assert len(player.data.queue) == 2
+        assert player.data.queue[0]["id"] == "tr-0"
+        assert player.data.queue[1]["title"] == "Come Together"
+        player.client.get_playlist.assert_called_once_with("pl-1")
+        player._enqueue_worker.assert_called_once_with("media_player.test_speaker", 1)
+
+    async def test_running_worker_is_reused(self) -> None:
+        """A running worker picks up appended tracks; no second worker starts."""
+        player = self._player_with_queue()
+        running = MagicMock()
+        running.done.return_value = False
+        player.data.enqueue_task = running
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/album/al-1",
+            enqueue=MediaPlayerEnqueue.ADD,
+        )
+
+        assert len(player.data.queue) == 3
+        player._enqueue_worker.assert_not_called()
+        assert player.data.enqueue_task is running
+
+    async def test_pending_reorder_defers_to_tail_rebuild(self) -> None:
+        """With queue_dirty set, the tail rebuild handles the new tracks."""
+        player = self._player_with_queue()
+        player.data.queue_dirty = True
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/album/al-1",
+            enqueue=MediaPlayerEnqueue.ADD,
+        )
+
+        assert len(player.data.queue) == 3
+        assert player.data.queue_dirty is True
+        player._enqueue_worker.assert_not_called()
+
+    async def test_empty_queue_plays_normally(self) -> None:
+        """With nothing queued, enqueue=add starts playback like a normal play."""
+        player = _make_player()
+        player.async_write_ha_state = MagicMock()
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/album/al-1",
+            enqueue=MediaPlayerEnqueue.ADD,
+        )
+
+        assert [t["title"] for t in player.data.queue] == ["Come Together", "Something"]
+        player.hass.services.async_call.assert_any_call(
+            "media_player", "media_stop",
+            {"entity_id": "media_player.test_speaker"}, blocking=True,
+        )
+
+    async def test_enqueue_play_still_replaces_queue(self) -> None:
+        """Other enqueue modes keep the existing replace-and-play behaviour."""
+        player = self._player_with_queue()
+
+        await player.async_play_media(
+            "music", "media-source://navidrome/album/al-1",
+            enqueue=MediaPlayerEnqueue.PLAY,
+        )
+
+        assert [t["title"] for t in player.data.queue] == ["Come Together", "Something"]
 
 
 class TestScrobble:
