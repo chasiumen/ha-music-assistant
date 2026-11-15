@@ -155,8 +155,14 @@ entity: media_player.navidrome_music_example_com
 | `navidrome.add_to_playlist` | Add a song to an existing playlist (params: `playlist_id`, `song_id`) |
 | `navidrome.add_to_queue` | Append a song to the queue (param: `song_id`) |
 | `navidrome.reorder_queue` | Move a track in the queue (params: `from_index`, `to_index`) |
+| `navidrome.remove_from_queue` | Remove tracks by 0-based position (params: `indices`, optional `song_ids` to guard against a changed queue) |
 
-The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted. Click any track to play it. The list auto-scrolls to the current track.
+The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted. Click any track to play it, drag ⠿ to reorder, or click ✕ to remove it. The list auto-scrolls to the current track.
+
+Removing tracks:
+- **The playing track:** skips to the next one. If playback is paused, it stops instead, and the next Play starts from the next track.
+- **An upcoming track:** takes effect at the next track change without interrupting the current song. If it was the very next song, the player may start it for a moment before moving on.
+- **An already-played track:** removed from the list only. Pressing ⏮ previous on the player can still go back to it.
 
 Card options (anything set in the card's YAML overrides the default; `0` is a valid value):
 

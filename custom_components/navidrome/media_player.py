@@ -30,6 +30,7 @@ from homeassistant.components.media_player.browse_media import (
 from homeassistant.const import STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 
 from . import NavidromeConfigEntry, NavidromeData
@@ -52,6 +53,7 @@ from .const import (
     PREFIX_ARTIST,
     PREFIX_PLAYLIST,
     PREFIX_SONG,
+    SIGNAL_PLAY_QUEUE_INDEX,
 )
 from .entity import navidrome_device_info
 
@@ -122,6 +124,10 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self._repeat_grace_deadline: float = 0.0
         self._playlist_cache: list[dict[str, Any]] | None = None
         self._playlist_cache_time: float = 0.0
+        # Set when the target was stopped because its current track was
+        # removed from the queue: the next Play restarts the target from the
+        # queue position instead of resuming the (removed) track.
+        self._restart_queue_on_play = False
 
     @property
     def supported_features(self) -> MediaPlayerEntityFeature:
@@ -136,6 +142,36 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             except ValueError:
                 pass
         self._setup_state_listener()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_PLAY_QUEUE_INDEX}_{self._entry.entry_id}",
+                self._async_play_queue_index,
+            )
+        )
+
+    async def _async_play_queue_index(self, index: int) -> None:
+        """Move playback after the current track was removed from the queue.
+
+        While playing, continue with the track at ``index``. When paused or
+        stopped, or nothing is left after the removed track, stop the target
+        (so the removed track can't resume) and let the next Play start the
+        queue from the current position.
+        """
+        target = self.target_player
+        if not target:
+            return
+        if index < len(self.data.queue) and self.state == MediaPlayerState.PLAYING:
+            await self._play_from_queue_index(target, index)
+            return
+        await self._async_stop_and_restart_on_play()
+
+    async def _async_stop_and_restart_on_play(self) -> None:
+        """Stop the target; the next Play restarts from the queue position."""
+        self.data.cancel_enqueue()
+        self._set_optimistic_state(MediaPlayerState.IDLE)
+        await self._proxy_command("media_stop")
+        self._restart_queue_on_play = bool(self.data.queue)
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel background tasks on unload."""
@@ -274,6 +310,10 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
     async def async_media_play(self) -> None:
         """Send play command to target player."""
+        target = self.target_player
+        if self._restart_queue_on_play and target and self.data.queue:
+            await self._play_from_queue_index(target, self.data.current_index)
+            return
         self._set_optimistic_state(MediaPlayerState.PLAYING)
         await self._proxy_command("media_play")
 
@@ -468,6 +508,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         # Cancel any in-flight background enqueue before rebuilding the queue
         self.data.cancel_enqueue()
+        self._restart_queue_on_play = False
 
         try:
             await self.hass.services.async_call(
@@ -698,6 +739,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         self.data.cancel_enqueue()
         self.data.current_index = index
         self.data.queue_dirty = False
+        self._restart_queue_on_play = False
         self.hass.async_create_task(self.data.save_queue())
 
         first = tracks[index]
@@ -777,6 +819,27 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                             )
                 found = True
                 break
+
+        if not found and title and self.data.queue_dirty and self.data.queue:
+            # The target started a track that's no longer in the queue: it was
+            # removed after being enqueued on the target (e.g. it was the very
+            # next track). Skip to the track that should follow the current one
+            # and rebuild the tail there.
+            self.data.queue_dirty = False
+            next_index = self.data.current_index + 1
+            target = self.target_player
+            LOGGER.info(
+                "Target started removed track '%s'; skipping to queue index %d",
+                title, next_index,
+            )
+            if target:
+                if next_index < len(self.data.queue):
+                    self.hass.async_create_task(
+                        self._play_from_queue_index(target, next_index)
+                    )
+                else:
+                    self.hass.async_create_task(self._async_stop_and_restart_on_play())
+            return
 
         if not found and title:
             LOGGER.info("Track '%s' not found in queue, searching Navidrome", title)

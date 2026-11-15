@@ -94,6 +94,20 @@
         }
       }
     },
+    "remove_from_queue": {
+      "name": "Remove from Queue",
+      "description": "Remove one or more tracks from the playback queue. Removing the playing track skips to the next one; removing upcoming tracks takes effect at the next track change without interrupting the current song.",
+      "fields": {
+        "indices": {
+          "name": "Positions",
+          "description": "0-based queue positions to remove (a single number or a list)."
+        },
+        "song_ids": {
+          "name": "Song IDs",
+          "description": "Optional Navidrome song ID for each position, in the same order. A position whose song doesn't match is skipped, so a stale view can't remove the wrong track."
+        }
+      }
+    },
     "reorder_queue": {
       "name": "Reorder Queue",
       "description": "Move a track from one position to another in the queue.",

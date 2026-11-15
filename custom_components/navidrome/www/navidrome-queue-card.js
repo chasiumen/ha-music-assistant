@@ -132,6 +132,7 @@ class NavidromeQueueCard extends HTMLElement {
           </div>
           <div class="nq-duration">${esc(duration)}</div>
           <div class="nq-play-btn" data-track-index="${track.index}" title="Play this track">▶</div>
+          <div class="nq-remove-btn" data-track-index="${track.index}" title="Remove from queue">✕</div>
         </div>`;
       })
       .join("");
@@ -210,7 +211,8 @@ class NavidromeQueueCard extends HTMLElement {
         .nq-track:hover {
           background: var(--secondary-background-color);
         }
-        .nq-track:hover .nq-play-btn {
+        .nq-track:hover .nq-play-btn,
+        .nq-track:hover .nq-remove-btn {
           opacity: 1;
         }
         .nq-current {
@@ -298,6 +300,25 @@ class NavidromeQueueCard extends HTMLElement {
         .nq-current .nq-play-btn {
           display: none;
         }
+        .nq-remove-btn {
+          opacity: 0;
+          font-size: 0.8em;
+          padding: 4px 6px;
+          min-width: 20px;
+          text-align: center;
+          cursor: pointer;
+          transition: opacity 0.2s, color 0.2s;
+        }
+        .nq-remove-btn:hover {
+          color: var(--error-color, #db4437);
+        }
+        /* Touch screens have no hover: keep row buttons visible */
+        @media (hover: none) {
+          .nq-play-btn,
+          .nq-remove-btn {
+            opacity: 0.6;
+          }
+        }
         .nq-empty {
           text-align: center;
           padding: 16px;
@@ -333,6 +354,13 @@ class NavidromeQueueCard extends HTMLElement {
         e.stopPropagation();
         const trackIndex = parseInt(btn.dataset.trackIndex) - 1;
         this._playTrack(trackIndex);
+      });
+    });
+
+    this.querySelectorAll(".nq-remove-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._removeTrack(parseInt(btn.dataset.trackIndex) - 1);
       });
     });
 
@@ -418,6 +446,17 @@ class NavidromeQueueCard extends HTMLElement {
     });
   }
 
+  _removeTrack(index) {
+    if (!this._hass || !this._config) return;
+    const track = this._hass.states[this._config.entity]?.attributes?.tracks?.[index];
+    if (!track) return;
+    // song_ids lets the backend skip the removal if the queue changed since
+    // this list was rendered, instead of removing a different song.
+    const data = { indices: [index] };
+    if (track.song_id) data.song_ids = [track.song_id];
+    this._hass.callService(DOMAIN, "remove_from_queue", data);
+  }
+
   _cycleRepeat() {
     if (!this._hass) return;
     const cycle = { off: "all", all: "one", one: "off" };
@@ -449,5 +488,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "navidrome-queue-card",
   name: "Navidrome Queue",
-  description: "Shows the current Navidrome playback queue with scrolling, click-to-play, and repeat controls",
+  description: "Shows the current Navidrome playback queue with scrolling, click-to-play, remove, reorder, and repeat controls",
 });
