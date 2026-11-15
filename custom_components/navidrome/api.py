@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import secrets
 from typing import Any
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urlencode
 
 import aiohttp
 
-from .const import LOGGER, SUBSONIC_API_VERSION, SUBSONIC_CLIENT_NAME
+from .const import (
+    API_DEFAULT_RESULT_COUNT,
+    API_TIMEOUT_SECONDS,
+    DEFAULT_COVER_ART_SIZE,
+    LOGGER,
+    SUBSONIC_API_VERSION,
+    SUBSONIC_CLIENT_NAME,
+)
+
+# Subsonic error code for wrong username or password
+_ERROR_WRONG_CREDENTIALS = 40
 
 
 class CannotConnect(Exception):
@@ -22,6 +33,45 @@ class AuthenticationFailed(Exception):
 
 class NavidromeApiError(Exception):
     """Error to indicate a generic API error."""
+
+
+@dataclass(frozen=True)
+class ServerInfo:
+    """Server details reported in every Subsonic response (read from ping).
+
+    ``server_type`` / ``server_version`` / ``open_subsonic`` are OpenSubsonic
+    extensions that Navidrome sends; plain Subsonic servers only send the
+    API version.
+    """
+
+    api_version: str | None = None  # Subsonic API version, e.g. "1.16.1"
+    server_type: str | None = None  # e.g. "navidrome"
+    server_version: str | None = None  # e.g. "0.53.3 (13af8ed4)"
+    open_subsonic: bool = False
+
+    @classmethod
+    def from_response(cls, response: dict[str, Any]) -> ServerInfo:
+        """Build from a "subsonic-response" payload."""
+        return cls(
+            api_version=response.get("version"),
+            server_type=response.get("type"),
+            server_version=response.get("serverVersion"),
+            open_subsonic=bool(response.get("openSubsonic", False)),
+        )
+
+    @property
+    def version(self) -> str | None:
+        """Version number without the build suffix, e.g. "0.53.3"."""
+        if not self.server_version:
+            return None
+        return self.server_version.split(" ", 1)[0]
+
+    @property
+    def build(self) -> str | None:
+        """Build/commit from the version string, e.g. "13af8ed4"."""
+        if not self.server_version or "(" not in self.server_version:
+            return None
+        return self.server_version.split("(", 1)[1].rstrip(")").strip() or None
 
 
 class NavidromeClient:
@@ -67,7 +117,9 @@ class NavidromeClient:
 
         try:
             async with self._session.get(
-                url, params=request_params, timeout=aiohttp.ClientTimeout(total=30)
+                url,
+                params=request_params,
+                timeout=aiohttp.ClientTimeout(total=API_TIMEOUT_SECONDS),
             ) as response:
                 response.raise_for_status()
                 data = await response.json(content_type=None)
@@ -87,8 +139,7 @@ class NavidromeClient:
             error = subsonic_response.get("error", {})
             code = error.get("code", 0)
             message = error.get("message", "Unknown error")
-            # Code 40 = wrong username or password
-            if code == 40:
+            if code == _ERROR_WRONG_CREDENTIALS:
                 raise AuthenticationFailed(message)
             raise NavidromeApiError(f"API error {code}: {message}")
 
@@ -96,10 +147,9 @@ class NavidromeClient:
 
     # -- System --
 
-    async def ping(self) -> bool:
-        """Check connectivity and authentication."""
-        await self._request("ping")
-        return True
+    async def ping(self) -> ServerInfo:
+        """Check connectivity and authentication; return the server details."""
+        return ServerInfo.from_response(await self._request("ping"))
 
     # -- Scrobble --
 
@@ -119,9 +169,9 @@ class NavidromeClient:
     async def search3(
         self,
         query: str,
-        song_count: int = 20,
-        album_count: int = 20,
-        artist_count: int = 20,
+        song_count: int = API_DEFAULT_RESULT_COUNT,
+        album_count: int = API_DEFAULT_RESULT_COUNT,
+        artist_count: int = API_DEFAULT_RESULT_COUNT,
     ) -> dict[str, Any]:
         """Search for songs, albums, and artists."""
         result = await self._request(
@@ -221,7 +271,7 @@ class NavidromeClient:
     async def get_album_list2(
         self,
         list_type: str,
-        size: int = 20,
+        size: int = API_DEFAULT_RESULT_COUNT,
         offset: int = 0,
         genre: str | None = None,
         from_year: int | None = None,
@@ -255,7 +305,7 @@ class NavidromeClient:
         params["id"] = song_id
         return f"{self._base_url}/rest/stream?{urlencode(params)}"
 
-    def cover_art_url(self, item_id: str, size: int = 300) -> str:
+    def cover_art_url(self, item_id: str, size: int = DEFAULT_COVER_ART_SIZE) -> str:
         """Build an authenticated cover art URL."""
         params = self._auth_params()
         params["id"] = item_id

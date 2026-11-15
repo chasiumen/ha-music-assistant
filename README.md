@@ -79,10 +79,24 @@ Navidrome's web UI handles all playback client-side (HTML5 `<audio>` element). S
 
 Go to **Settings > Devices & Services > Navidrome > Configure** to set:
 
-| Option | Description |
-|--------|-------------|
-| Target media player | The media player to play audio on (e.g., a Sonos speaker, Chromecast, or browser player). Required for voice control and dashboard playback. |
-| Enable scrobbling | Send "now playing" status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins. Off by default. |
+| Option | Description | Default |
+|--------|-------------|---------|
+| Target media player | The media player to play audio on (e.g., a Sonos speaker, Chromecast, or browser player). Required for voice control and dashboard playback. | — |
+| Enable scrobbling | Send "now playing" status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins. | Off |
+| Search result limit | Max songs, albums and artists fetched per search (10–1000). Cards trim how many they display. | `500` |
+| Playlist cache duration | Seconds the playlist list used for playlist search is cached (0–3600, `0` = no cache). | `30` |
+| Control grace window | Seconds to ignore contradicting target-player updates after play/pause/stop/repeat, so stale events don't flip the controls back (0–60). | `10` |
+
+Unset options fall back to the defaults in `custom_components/navidrome/const.py`. Changes apply immediately, without a restart.
+
+### Server version
+
+The Navidrome server version is shown on the integration's device page as its software version, and as a diagnostic sensor, `sensor.<device>_server_version`:
+
+- **State:** the version number, e.g. `0.53.3`
+- **Attributes:** `build`, `server_type`, `api_version` (Subsonic API), `open_subsonic`
+
+It's re-checked every hour, so a Navidrome upgrade shows up without restarting Home Assistant. Plain Subsonic servers don't report a server version, so the sensor shows `unknown` for them.
 
 ## Usage
 
@@ -108,13 +122,15 @@ Recommended dashboard setup with the built-in queue card:
 type: vertical-stack
 cards:
   - type: media-control
-    entity: media_player.navidrome_ryosukemorino_com
+    entity: media_player.navidrome_music_example_com
   - type: custom:navidrome-search-card
-    entity: media_player.navidrome_ryosukemorino_com
+    entity: media_player.navidrome_music_example_com
   - type: custom:navidrome-queue-card
-    entity: sensor.navidrome_ryosukemorino_com_queue
-    max_height: 400
+    entity: sensor.navidrome_music_example_com_queue
+    max_visible: 8
 ```
+
+Replace the entity IDs with yours. When you add a card from the dashboard card picker, it fills in your Navidrome entity automatically.
 
 ### Search Card
 
@@ -122,12 +138,12 @@ The search card lets you find and play music without browsing:
 
 ```yaml
 type: custom:navidrome-search-card
-entity: media_player.navidrome_ryosukemorino_com
+entity: media_player.navidrome_music_example_com
 ```
 
-- Type to search — results appear grouped by Songs, Albums, Artists
+- Type to search — results appear grouped by Songs, Albums, Artists, Playlists
 - Click ▶ to play immediately
-- Click ➕ to add to the current queue
+- Click ➕ to add a song, album or playlist to the end of the current queue
 - Click 💾 to save to a Navidrome playlist
 
 ### Services
@@ -142,7 +158,7 @@ entity: media_player.navidrome_ryosukemorino_com
 
 The queue card is bundled with the integration — no extra HACS installations needed. It shows a scrollable list of tracks with the current track highlighted. Click any track to play it. The list auto-scrolls to the current track.
 
-Card options:
+Card options (anything set in the card's YAML overrides the default; `0` is a valid value):
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -158,9 +174,12 @@ Search card options:
 | `entity` | (required) | Navidrome media player entity ID |
 | `max_songs` | `20` | Max songs to display in results |
 | `max_albums` | `10` | Max albums to display in results |
-| `max_artists` | `5` | Max artists to display in results |
+| `max_artists` | `5` | Max artists to display in results (`0` hides the section) |
+| `max_playlists` | `5` | Max playlists to display in results |
 | `max_height` | `500` | Max height in pixels (scrollable) |
 | `debounce_ms` | `400` | Search delay in milliseconds |
+| `min_query_length` | `2` | Characters typed before a search runs |
+| `title` | `Search` | Card header text |
 
 ### Voice Control (plays on target player)
 
@@ -187,8 +206,9 @@ ha-music-assistant/
 │   └── navidrome/
 │       ├── __init__.py           # Integration setup, config entry lifecycle
 │       ├── api.py                # Async Subsonic API client (aiohttp, no external deps)
-│       ├── config_flow.py        # Config flow: URL + credentials + reauth
-│       ├── const.py              # Domain, logger, constants
+│       ├── config_flow.py        # Config flow: URL + credentials + reauth + options
+│       ├── const.py              # All constants and option defaults (single source of truth)
+│       ├── entity.py             # Shared device info for all entities
 │       ├── media_source.py       # MediaSource: browse library + resolve stream URLs
 │       ├── media_player.py       # Media player entity: search, play, queue, proxy controls
 │       ├── sensor.py             # Queue sensor for dashboard display
@@ -203,6 +223,8 @@ ha-music-assistant/
 │           ├── conftest.py       # Test fixtures, mock API client
 │           ├── test_api.py       # API client tests (auth, endpoints, errors)
 │           ├── test_config_flow.py  # Config flow tests
+│           ├── test_init.py         # Setup helpers (card registration)
+│           ├── test_options.py      # Option input bounds
 │           ├── test_media_source.py # Media source browse + resolve tests
 │           ├── test_media_player.py # Media player controls, queue, scrobble tests
 │           ├── test_sensor.py       # Queue sensor tests

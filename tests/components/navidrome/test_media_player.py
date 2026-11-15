@@ -7,9 +7,18 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from homeassistant.components.media_player import MediaPlayerEnqueue
+from homeassistant.components.media_player import MediaPlayerEnqueue, MediaPlayerState
+from homeassistant.components.media_player.browse_media import SearchMediaQuery
 
 from custom_components.navidrome import NavidromeData, apply_reorder
+from custom_components.navidrome.const import (
+    CONF_CONTROL_GRACE_SECONDS,
+    CONF_PLAYLIST_CACHE_TTL,
+    CONF_SEARCH_RESULT_LIMIT,
+    DEFAULT_CONTROL_GRACE_SECONDS,
+    DEFAULT_PLAYLIST_CACHE_TTL,
+    DEFAULT_SEARCH_RESULT_LIMIT,
+)
 from custom_components.navidrome.media_player import NavidromeMediaPlayer
 
 from .conftest import MOCK_ALBUM_DETAIL, MOCK_PLAYLISTS, MOCK_PLAYLIST_DETAIL, MOCK_SONG
@@ -18,6 +27,7 @@ from .conftest import MOCK_ALBUM_DETAIL, MOCK_PLAYLISTS, MOCK_PLAYLIST_DETAIL, M
 def _make_player(
     target_player: str | None = "media_player.test_speaker",
     scrobble_enabled: bool = False,
+    options: dict | None = None,
 ) -> NavidromeMediaPlayer:
     """Create a NavidromeMediaPlayer with mock data and a real asyncio.Lock."""
     mock_client = MagicMock()
@@ -43,6 +53,7 @@ def _make_player(
     mock_entry.options = {
         "target_player": target_player,
         "scrobble_enabled": scrobble_enabled,
+        **(options or {}),
     }
 
     player = NavidromeMediaPlayer(mock_entry)
@@ -1079,3 +1090,58 @@ class TestPlaylistSearch:
         playlist_results = [r for r in result.result if r.media_class.value == "playlist"]
         assert len(playlist_results) == 0
         player.client.get_playlists.assert_not_called()
+
+
+class TestOptionOverrides:
+    """Options set in Configure override the const.py defaults."""
+
+    def test_defaults_when_options_unset(self) -> None:
+        """Without options, the const.py defaults apply."""
+        player = _make_player()
+
+        assert player.search_result_limit == DEFAULT_SEARCH_RESULT_LIMIT
+        assert player.playlist_cache_ttl == DEFAULT_PLAYLIST_CACHE_TTL
+        assert player.control_grace_seconds == DEFAULT_CONTROL_GRACE_SECONDS
+
+    async def test_search_uses_configured_limit(self) -> None:
+        """search_result_limit is passed to search3 (NumberSelector floats → int)."""
+        player = _make_player(options={CONF_SEARCH_RESULT_LIMIT: 50.0})
+        player.client.search3 = AsyncMock(return_value={})
+
+        await player.async_search_media(SearchMediaQuery(search_query="x"))
+
+        player.client.search3.assert_called_once_with(
+            "x", song_count=50, album_count=50, artist_count=50
+        )
+
+    async def test_search_uses_default_limit(self) -> None:
+        """Without the option, search3 gets the default limit."""
+        player = _make_player()
+        player.client.search3 = AsyncMock(return_value={})
+
+        await player.async_search_media(SearchMediaQuery(search_query="x"))
+
+        assert player.client.search3.call_args.kwargs["song_count"] == DEFAULT_SEARCH_RESULT_LIMIT
+
+    async def test_playlist_cache_ttl_zero_disables_cache(self) -> None:
+        """A TTL of 0 refetches playlists on every search."""
+        player = _make_player(options={CONF_PLAYLIST_CACHE_TTL: 0})
+        player.client.search3 = AsyncMock(return_value={})
+
+        query = SearchMediaQuery(search_query="Fav")
+        await player.async_search_media(query)
+        await player.async_search_media(query)
+
+        assert player.client.get_playlists.call_count == 2
+
+    def test_control_grace_option_sets_deadline(self) -> None:
+        """The optimistic grace window uses the configured seconds."""
+        player = _make_player(options={CONF_CONTROL_GRACE_SECONDS: 3})
+        player.async_write_ha_state = MagicMock()
+
+        with patch(
+            "custom_components.navidrome.media_player.time.monotonic", return_value=100.0
+        ):
+            player._set_optimistic_state(MediaPlayerState.PAUSED)
+
+        assert player._optimistic_deadline == 103.0
