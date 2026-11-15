@@ -89,6 +89,15 @@ Go to **Settings > Devices & Services > Navidrome > Configure** to set:
 
 Unset options fall back to the defaults in `custom_components/navidrome/const.py`. Changes apply immediately, without a restart.
 
+### Server version
+
+The Navidrome server version is shown on the integration's device page as its software version, and as a diagnostic sensor, `sensor.<device>_server_version`:
+
+- **State:** the version number, e.g. `0.53.3`
+- **Attributes:** `build`, `server_type`, `api_version` (Subsonic API), `open_subsonic`
+
+It's re-checked every hour, so a Navidrome upgrade shows up without restarting Home Assistant. Plain Subsonic servers don't report a server version, so the sensor shows `unknown` for them.
+
 ## Usage
 
 ### Media Browser (plays on any speaker)

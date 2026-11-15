@@ -16,11 +16,19 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .api import AuthenticationFailed, CannotConnect, NavidromeClient
+from .api import (
+    AuthenticationFailed,
+    CannotConnect,
+    NavidromeApiError,
+    NavidromeClient,
+    ServerInfo,
+)
 from .const import (
     CONF_TARGET_PLAYER,
     COVER_ART_CACHE_MAX_AGE,
@@ -35,7 +43,9 @@ from .const import (
     SERVICE_CLEAR_QUEUE,
     SERVICE_REORDER_QUEUE,
     SERVICE_SAVE_QUEUE_AS_PLAYLIST,
+    SERVER_INFO_REFRESH_INTERVAL,
     SIGNAL_QUEUE_UPDATED,
+    SIGNAL_SERVER_INFO_UPDATED,
 )
 
 STORAGE_VERSION = 1
@@ -64,6 +74,7 @@ class NavidromeData:
 
     client: NavidromeClient
     store: Store | None = None
+    server_info: ServerInfo | None = None
     queue: list[dict[str, Any]] = field(default_factory=list)
     current_index: int = 0
     hass: Any | None = None
@@ -161,17 +172,23 @@ async def async_setup_entry(
     )
 
     try:
-        await client.ping()
+        server_info = await client.ping()
     except AuthenticationFailed as err:
         raise ConfigEntryAuthFailed(err) from err
     except CannotConnect as err:
         raise ConfigEntryNotReady(
             f"Cannot connect to Navidrome server: {err}"
         ) from err
+    LOGGER.info(
+        "Connected to %s %s (Subsonic API %s)",
+        server_info.server_type or "Subsonic server",
+        server_info.server_version or "(version not reported)",
+        server_info.api_version,
+    )
 
     # Create shared data with persistent storage
     store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}_{entry.entry_id}")
-    data = NavidromeData(client=client, store=store)
+    data = NavidromeData(client=client, store=store, server_info=server_info)
     data.hass = hass
     data.entry_id = entry.entry_id
 
@@ -179,6 +196,16 @@ async def async_setup_entry(
     await data.load_queue()
 
     entry.runtime_data = data
+
+    # Re-check the server version periodically so upgrades show up live
+    async def _refresh_server_info(_now: Any) -> None:
+        await async_refresh_server_info(hass, entry)
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _refresh_server_info, SERVER_INFO_REFRESH_INTERVAL
+        )
+    )
 
     # Register cover art proxy view
     hass.http.register_view(NavidromeCoverArtView(data))
@@ -325,6 +352,39 @@ async def async_unload_entry(
     for svc in SERVICE_SCHEMAS:
         hass.services.async_remove(DOMAIN, svc)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_refresh_server_info(
+    hass: HomeAssistant, entry: NavidromeConfigEntry
+) -> None:
+    """Re-ping the server; on a change, update the device and version sensor.
+
+    A failed ping keeps the last known info (the version doesn't change just
+    because the server is briefly unreachable).
+    """
+    data = entry.runtime_data
+    try:
+        info = await data.client.ping()
+    except (CannotConnect, AuthenticationFailed, NavidromeApiError) as err:
+        LOGGER.debug("Server info refresh failed, keeping last known: %s", err)
+        return
+
+    if info == data.server_info:
+        return
+
+    LOGGER.info(
+        "Navidrome server version changed: %s -> %s",
+        data.server_info.server_version if data.server_info else None,
+        info.server_version,
+    )
+    data.server_info = info
+
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    if device and device.sw_version != info.server_version:
+        dev_reg.async_update_device(device.id, sw_version=info.server_version)
+
+    async_dispatcher_send(hass, f"{SIGNAL_SERVER_INFO_UPDATED}_{entry.entry_id}")
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:

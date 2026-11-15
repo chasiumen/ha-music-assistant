@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import secrets
 from typing import Any
@@ -32,6 +33,45 @@ class AuthenticationFailed(Exception):
 
 class NavidromeApiError(Exception):
     """Error to indicate a generic API error."""
+
+
+@dataclass(frozen=True)
+class ServerInfo:
+    """Server details reported in every Subsonic response (read from ping).
+
+    ``server_type`` / ``server_version`` / ``open_subsonic`` are OpenSubsonic
+    extensions that Navidrome sends; plain Subsonic servers only send the
+    API version.
+    """
+
+    api_version: str | None = None  # Subsonic API version, e.g. "1.16.1"
+    server_type: str | None = None  # e.g. "navidrome"
+    server_version: str | None = None  # e.g. "0.53.3 (13af8ed4)"
+    open_subsonic: bool = False
+
+    @classmethod
+    def from_response(cls, response: dict[str, Any]) -> ServerInfo:
+        """Build from a "subsonic-response" payload."""
+        return cls(
+            api_version=response.get("version"),
+            server_type=response.get("type"),
+            server_version=response.get("serverVersion"),
+            open_subsonic=bool(response.get("openSubsonic", False)),
+        )
+
+    @property
+    def version(self) -> str | None:
+        """Version number without the build suffix, e.g. "0.53.3"."""
+        if not self.server_version:
+            return None
+        return self.server_version.split(" ", 1)[0]
+
+    @property
+    def build(self) -> str | None:
+        """Build/commit from the version string, e.g. "13af8ed4"."""
+        if not self.server_version or "(" not in self.server_version:
+            return None
+        return self.server_version.split("(", 1)[1].rstrip(")").strip() or None
 
 
 class NavidromeClient:
@@ -107,10 +147,9 @@ class NavidromeClient:
 
     # -- System --
 
-    async def ping(self) -> bool:
-        """Check connectivity and authentication."""
-        await self._request("ping")
-        return True
+    async def ping(self) -> ServerInfo:
+        """Check connectivity and authentication; return the server details."""
+        return ServerInfo.from_response(await self._request("ping"))
 
     # -- Scrobble --
 

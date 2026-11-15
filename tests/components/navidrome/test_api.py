@@ -13,6 +13,7 @@ from custom_components.navidrome.api import (
     CannotConnect,
     NavidromeApiError,
     NavidromeClient,
+    ServerInfo,
 )
 
 
@@ -63,12 +64,44 @@ class TestNavidromeClient:
     async def test_ping_success(
         self, client: NavidromeClient, mock_session: MagicMock
     ) -> None:
-        """Test successful ping."""
+        """A plain Subsonic ping returns the API version only."""
         mock_session.get.return_value = _mock_response(
             {"subsonic-response": {"status": "ok", "version": "1.16.1"}}
         )
         result = await client.ping()
-        assert result is True
+        assert result == ServerInfo(api_version="1.16.1")
+        assert result.version is None
+        assert result.build is None
+
+    async def test_ping_returns_navidrome_server_info(
+        self, client: NavidromeClient, mock_session: MagicMock
+    ) -> None:
+        """Navidrome's OpenSubsonic fields are parsed from the ping response."""
+        mock_session.get.return_value = _mock_response(
+            {
+                "subsonic-response": {
+                    "status": "ok",
+                    "version": "1.16.1",
+                    "type": "navidrome",
+                    "serverVersion": "0.53.3 (13af8ed4)",
+                    "openSubsonic": True,
+                }
+            }
+        )
+        info = await client.ping()
+
+        assert info.api_version == "1.16.1"
+        assert info.server_type == "navidrome"
+        assert info.server_version == "0.53.3 (13af8ed4)"
+        assert info.open_subsonic is True
+        assert info.version == "0.53.3"
+        assert info.build == "13af8ed4"
+
+    def test_server_info_version_without_build(self) -> None:
+        """A version string with no build suffix parses cleanly."""
+        info = ServerInfo(server_version="0.54.0")
+        assert info.version == "0.54.0"
+        assert info.build is None
 
     async def test_ping_cannot_connect(
         self, client: NavidromeClient, mock_session: MagicMock

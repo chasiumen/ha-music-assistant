@@ -9,9 +9,17 @@ import pytest
 
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
 
+from custom_components.navidrome.api import ServerInfo
 from custom_components.navidrome.const import DOMAIN
 
 MOCK_URL = "http://navidrome.local:4533"
+
+MOCK_SERVER_INFO = ServerInfo(
+    api_version="1.16.1",
+    server_type="navidrome",
+    server_version="0.53.3 (13af8ed4)",
+    open_subsonic=True,
+)
 MOCK_USERNAME = "testuser"
 MOCK_PASSWORD = "testpass"
 
@@ -181,7 +189,7 @@ def mock_navidrome_client() -> Generator[MagicMock]:
         "custom_components.navidrome.api.NavidromeClient", autospec=True
     ) as mock_cls:
         client = mock_cls.return_value
-        client.ping = AsyncMock(return_value=True)
+        client.ping = AsyncMock(return_value=MOCK_SERVER_INFO)
         client.search3 = AsyncMock(return_value=MOCK_SEARCH_RESULTS)
         client.get_artists = AsyncMock(return_value=MOCK_ARTISTS)
         client.get_artist = AsyncMock(return_value=MOCK_ARTIST_DETAIL)

@@ -9,6 +9,7 @@ default below.
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 
 DOMAIN = "navidrome"
@@ -45,6 +46,9 @@ SUBSONIC_CLIENT_NAME = "HomeAssistant"
 API_TIMEOUT_SECONDS = 30
 API_DEFAULT_RESULT_COUNT = 20
 DEFAULT_COVER_ART_SIZE = 300
+# Re-ping the server this often so a Navidrome upgrade shows up without an
+# HA restart (device software version + server version sensor).
+SERVER_INFO_REFRESH_INTERVAL = timedelta(hours=1)
 
 # -- Media IDs: media-source://navidrome/<type>/<id> --
 MEDIA_SOURCE_PREFIX = f"media-source://{DOMAIN}"
@@ -79,5 +83,6 @@ SERVICE_ADD_TO_PLAYLIST = "add_to_playlist"
 SERVICE_ADD_TO_QUEUE = "add_to_queue"
 SERVICE_REORDER_QUEUE = "reorder_queue"
 
-# -- Dispatcher signals --
+# -- Dispatcher signals (suffixed with _<entry_id>) --
 SIGNAL_QUEUE_UPDATED = f"{DOMAIN}_queue_updated"
+SIGNAL_SERVER_INFO_UPDATED = f"{DOMAIN}_server_info_updated"

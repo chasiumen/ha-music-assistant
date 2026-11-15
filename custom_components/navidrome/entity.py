@@ -14,11 +14,17 @@ if TYPE_CHECKING:
 
 
 def navidrome_device_info(entry: NavidromeConfigEntry) -> DeviceInfo:
-    """Return the DeviceInfo shared by every Navidrome entity of an entry."""
+    """Return the DeviceInfo shared by every Navidrome entity of an entry.
+
+    sw_version is the Navidrome server version read at setup; the hourly
+    refresh in __init__ keeps the device registry current after upgrades.
+    """
+    server_info = entry.runtime_data.server_info
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
         manufacturer=MANUFACTURER,
         model=MODEL,
         name=entry.title,
         configuration_url=entry.data.get(CONF_URL),
+        sw_version=server_info.server_version if server_info else None,
     )

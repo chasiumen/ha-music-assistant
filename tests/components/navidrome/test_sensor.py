@@ -6,8 +6,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from homeassistant.const import EntityCategory
+
 from custom_components.navidrome import NavidromeData
-from custom_components.navidrome.sensor import NavidromeQueueSensor
+from custom_components.navidrome.api import ServerInfo
+from custom_components.navidrome.entity import navidrome_device_info
+from custom_components.navidrome.sensor import (
+    NavidromeQueueSensor,
+    NavidromeServerVersionSensor,
+)
+
+from .conftest import MOCK_SERVER_INFO
 
 
 MOCK_TRACKS = [
@@ -41,18 +50,29 @@ MOCK_TRACKS = [
 ]
 
 
-def _make_sensor(queue: list = None, current_index: int = 0) -> NavidromeQueueSensor:
-    """Create a NavidromeQueueSensor with mock data."""
-    mock_client = MagicMock()
-    data = NavidromeData(client=mock_client, queue=queue or [], current_index=current_index)
-
+def _make_entry(
+    queue: list | None = None,
+    current_index: int = 0,
+    server_info: ServerInfo | None = None,
+) -> MagicMock:
+    """Create a mock config entry with real NavidromeData."""
+    data = NavidromeData(
+        client=MagicMock(),
+        queue=queue or [],
+        current_index=current_index,
+        server_info=server_info,
+    )
     mock_entry = MagicMock()
     mock_entry.entry_id = "test_entry_123"
     mock_entry.runtime_data = data
     mock_entry.data = {"url": "http://navidrome.local:4533"}
     mock_entry.title = "Navidrome (test)"
+    return mock_entry
 
-    return NavidromeQueueSensor(mock_entry)
+
+def _make_sensor(queue: list = None, current_index: int = 0) -> NavidromeQueueSensor:
+    """Create a NavidromeQueueSensor with mock data."""
+    return NavidromeQueueSensor(_make_entry(queue, current_index))
 
 
 class TestNavidromeQueueSensor:
@@ -139,3 +159,64 @@ class TestNavidromeQueueSensor:
         sensor = _make_sensor()
         assert hasattr(sensor, "async_added_to_hass")
         assert callable(sensor.async_added_to_hass)
+
+
+class TestNavidromeServerVersionSensor:
+    """Test the diagnostic server version sensor."""
+
+    def test_value_and_attributes(self) -> None:
+        """State is the version number; details are attributes."""
+        sensor = NavidromeServerVersionSensor(_make_entry(server_info=MOCK_SERVER_INFO))
+
+        assert sensor.native_value == "0.53.3"
+        assert sensor.extra_state_attributes == {
+            "build": "13af8ed4",
+            "server_type": "navidrome",
+            "api_version": "1.16.1",
+            "open_subsonic": True,
+        }
+
+    def test_reads_live_server_info(self) -> None:
+        """A refreshed server_info is reflected without recreating the entity."""
+        entry = _make_entry(server_info=MOCK_SERVER_INFO)
+        sensor = NavidromeServerVersionSensor(entry)
+
+        entry.runtime_data.server_info = ServerInfo(server_version="0.54.0 (abc)")
+
+        assert sensor.native_value == "0.54.0"
+
+    def test_unknown_when_not_reported(self) -> None:
+        """Plain Subsonic servers don't report a server version."""
+        sensor = NavidromeServerVersionSensor(
+            _make_entry(server_info=ServerInfo(api_version="1.16.1"))
+        )
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes["api_version"] == "1.16.1"
+
+    def test_no_server_info(self) -> None:
+        """No server info at all yields an unknown state and no attributes."""
+        sensor = NavidromeServerVersionSensor(_make_entry())
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {}
+
+    def test_entity_metadata(self) -> None:
+        """Diagnostic, non-polling, unique per entry."""
+        sensor = NavidromeServerVersionSensor(_make_entry())
+        assert sensor.unique_id == "test_entry_123_server_version"
+        assert sensor.entity_category == EntityCategory.DIAGNOSTIC
+        assert sensor.should_poll is False
+        assert sensor.name == "Server version"
+
+
+class TestDeviceInfo:
+    """Test the shared device info."""
+
+    def test_sw_version_is_server_version(self) -> None:
+        """The device's software version is the Navidrome server version."""
+        info = navidrome_device_info(_make_entry(server_info=MOCK_SERVER_INFO))
+        assert info["sw_version"] == "0.53.3 (13af8ed4)"
+        assert info["manufacturer"] == "Navidrome"
+
+    def test_sw_version_none_without_server_info(self) -> None:
+        """No server info → no software version."""
+        assert navidrome_device_info(_make_entry())["sw_version"] is None
