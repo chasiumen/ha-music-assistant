@@ -1,9 +1,38 @@
+const DOMAIN = "navidrome";
+const MEDIA_SOURCE_PREFIX = `media-source://${DOMAIN}`;
+const SONG_ID_PREFIX = `${MEDIA_SOURCE_PREFIX}/song/`;
+const PLAYLIST_ID_PREFIX = `${MEDIA_SOURCE_PREFIX}/playlist/`;
+const FLASH_MS = 1500; // how long ✓ / ✗ stays on a button
+
+// Card options. Anything set in the card's YAML overrides these.
+const DEFAULTS = Object.freeze({
+  title: "Search",
+  max_height: 500, // px before the results list scrolls
+  debounce_ms: 400,
+  min_query_length: 2,
+  max_songs: 20,
+  max_albums: 10,
+  max_artists: 5,
+  max_playlists: 5,
+});
+
 function esc(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// First entity of `domain` created by the Navidrome integration (falls back
+// to any entity whose ID mentions navidrome). Used for the card picker stub.
+function findNavidromeEntity(hass, domain) {
+  const ids = Object.keys(hass?.states ?? {}).filter((id) => id.startsWith(`${domain}.`));
+  return (
+    ids.find((id) => hass.entities?.[id]?.platform === DOMAIN) ??
+    ids.find((id) => id.includes(DOMAIN)) ??
+    ""
+  );
 }
 
 class NavidromeSearchCard extends HTMLElement {
@@ -18,17 +47,7 @@ class NavidromeSearchCard extends HTMLElement {
     if (!config.entity) {
       throw new Error("Please define a media_player entity");
     }
-    this._config = {
-      entity: config.entity,
-      max_height: config.max_height || 500,
-      title: config.title || "Search",
-      debounce_ms: config.debounce_ms || 400,
-      max_songs: config.max_songs || 20,
-      max_albums: config.max_albums || 10,
-      max_artists: config.max_artists || 5,
-      max_playlists: config.max_playlists || 5,
-      ...config,
-    };
+    this._config = { ...DEFAULTS, ...config };
     this._searchResults = null;
     this._searchTimeout = null;
     this._playlistCache = null;
@@ -38,10 +57,8 @@ class NavidromeSearchCard extends HTMLElement {
     return 4;
   }
 
-  static getStubConfig() {
-    return {
-      entity: "media_player.navidrome_ryosukemorino_com",
-    };
+  static getStubConfig(hass) {
+    return { entity: findNavidromeEntity(hass, "media_player") };
   }
 
   _render() {
@@ -223,7 +240,7 @@ class NavidromeSearchCard extends HTMLElement {
     input.addEventListener("input", () => {
       clearTimeout(this._searchTimeout);
       const query = input.value.trim();
-      if (query.length < 2) {
+      if (query.length < this._config.min_query_length) {
         this._showEmpty("Type to search your Navidrome library");
         return;
       }
@@ -390,7 +407,7 @@ class NavidromeSearchCard extends HTMLElement {
           if (item.dataset.type === "song") {
             const songId = this._extractSongId(contentId);
             if (!songId) throw new Error(`No song id in ${contentId}`);
-            await this._hass.callService("navidrome", "add_to_queue", { song_id: songId });
+            await this._hass.callService(DOMAIN, "add_to_queue", { song_id: songId });
           } else {
             // Albums and playlists: the media player resolves them to tracks
             // and appends them without interrupting playback.
@@ -424,12 +441,12 @@ class NavidromeSearchCard extends HTMLElement {
 
   _flashButton(btn, text) {
     btn.textContent = text;
-    setTimeout(() => { btn.textContent = "➕"; }, 1500);
+    setTimeout(() => { btn.textContent = "➕"; }, FLASH_MS);
   }
 
   _extractSongId(contentId) {
-    if (contentId.includes("media-source://navidrome/song/")) {
-      return contentId.replace("media-source://navidrome/song/", "");
+    if (contentId.startsWith(SONG_ID_PREFIX)) {
+      return contentId.slice(SONG_ID_PREFIX.length);
     }
     try {
       const url = new URL(contentId);
@@ -473,8 +490,8 @@ class NavidromeSearchCard extends HTMLElement {
     dropdown.querySelectorAll("[data-playlist-id]").forEach((opt) => {
       opt.addEventListener("click", (e) => {
         e.stopPropagation();
-        const playlistId = opt.dataset.playlistId.replace("media-source://navidrome/playlist/", "");
-        this._hass.callService("navidrome", "add_to_playlist", {
+        const playlistId = opt.dataset.playlistId.replace(PLAYLIST_ID_PREFIX, "");
+        this._hass.callService(DOMAIN, "add_to_playlist", {
           playlist_id: playlistId,
           song_id: songId,
         });
@@ -486,7 +503,7 @@ class NavidromeSearchCard extends HTMLElement {
       e.stopPropagation();
       const name = prompt("Enter playlist name:");
       if (name) {
-        this._hass.callService("navidrome", "add_to_playlist", {
+        this._hass.callService(DOMAIN, "add_to_playlist", {
           playlist_id: "__new__:" + name,
           song_id: songId,
         });

@@ -15,7 +15,16 @@ from homeassistant.core import HomeAssistant
 
 from . import NavidromeConfigEntry
 from .api import NavidromeClient
-from .const import DOMAIN, LOGGER
+from .const import (
+    BROWSE_ALBUM_LIST_SIZE,
+    DEFAULT_MIME_TYPE,
+    DOMAIN,
+    PREFIX_ALBUM,
+    PREFIX_ARTIST,
+    PREFIX_GENRE,
+    PREFIX_PLAYLIST,
+    PREFIX_SONG,
+)
 
 # Browse tree category identifiers
 CAT_ARTISTS = "artists"
@@ -25,13 +34,6 @@ CAT_GENRES = "genres"
 CAT_RECENT = "recent"
 CAT_MOST_PLAYED = "most_played"
 CAT_RANDOM = "random"
-
-# Item type prefixes for content IDs
-PREFIX_ARTIST = "artist"
-PREFIX_ALBUM = "album"
-PREFIX_SONG = "song"
-PREFIX_PLAYLIST = "playlist"
-PREFIX_GENRE = "genre"
 
 
 async def async_get_media_source(hass: HomeAssistant) -> MediaSource:
@@ -66,7 +68,7 @@ class NavidromeSource(MediaSource):
 
         if item_type == PREFIX_SONG:
             url = self.client.stream_url(item_id)
-            return PlayMedia(url, "audio/mpeg")
+            return PlayMedia(url, DEFAULT_MIME_TYPE)
 
         if item_type == PREFIX_ALBUM:
             album = await self.client.get_album(item_id)
@@ -74,7 +76,7 @@ class NavidromeSource(MediaSource):
             if not songs:
                 raise BrowseError("Album has no songs")
             url = self.client.stream_url(songs[0]["id"])
-            return PlayMedia(url, "audio/mpeg")
+            return PlayMedia(url, DEFAULT_MIME_TYPE)
 
         if item_type == PREFIX_PLAYLIST:
             playlist = await self.client.get_playlist(item_id)
@@ -82,7 +84,7 @@ class NavidromeSource(MediaSource):
             if not entries:
                 raise BrowseError("Playlist is empty")
             url = self.client.stream_url(entries[0]["id"])
-            return PlayMedia(url, "audio/mpeg")
+            return PlayMedia(url, DEFAULT_MIME_TYPE)
 
         raise BrowseError(f"Cannot play item type: {item_type}")
 
@@ -220,7 +222,7 @@ class NavidromeSource(MediaSource):
         self, list_type: str, title: str
     ) -> BrowseMediaSource:
         """Build an album list page."""
-        albums = await self.client.get_album_list2(list_type, size=50)
+        albums = await self.client.get_album_list2(list_type, size=BROWSE_ALBUM_LIST_SIZE)
 
         identifier_map = {
             "alphabeticalByName": CAT_ALBUMS,
@@ -354,7 +356,7 @@ class NavidromeSource(MediaSource):
     async def _build_genre_albums(self, genre_name: str) -> BrowseMediaSource:
         """Build a genre detail page with albums."""
         albums = await self.client.get_album_list2(
-            "byGenre", size=50, genre=genre_name
+            "byGenre", size=BROWSE_ALBUM_LIST_SIZE, genre=genre_name
         )
 
         result = BrowseMediaSource(
@@ -399,7 +401,7 @@ class NavidromeSource(MediaSource):
         if artist:
             title = f"{artist} - {title}"
 
-        mime_type = song.get("contentType", "audio/mpeg")
+        mime_type = song.get("contentType", DEFAULT_MIME_TYPE)
 
         return BrowseMediaSource(
             domain=DOMAIN,

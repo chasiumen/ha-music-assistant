@@ -8,13 +8,13 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.const import CONF_URL
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavidromeConfigEntry, NavidromeData
-from .const import DOMAIN
+from .const import SIGNAL_QUEUE_UPDATED
+from .entity import navidrome_device_info
 
 
 async def async_setup_entry(
@@ -38,18 +38,10 @@ class NavidromeQueueSensor(SensorEntity):
         """Initialize the queue sensor."""
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_queue"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="Navidrome",
-            model="Music Server",
-            name=entry.title,
-            configuration_url=entry.data.get(CONF_URL),
-        )
+        self._attr_device_info = navidrome_device_info(entry)
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to queue update signals."""
-        from homeassistant.helpers.dispatcher import async_dispatcher_connect
-        from .const import SIGNAL_QUEUE_UPDATED
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,

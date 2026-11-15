@@ -1,9 +1,34 @@
+const DOMAIN = "navidrome";
+const SONG_ID_PREFIX = `media-source://${DOMAIN}/song/`;
+const ROW_HEIGHT_PX = 44; // height of one track row, used to size the list
+
+// Card options. Anything set in the card's YAML overrides these.
+const DEFAULTS = Object.freeze({
+  title: "Queue",
+  max_visible: 10, // rows shown before the list scrolls
+  player_entity: null, // null = derive from the queue sensor's entity ID
+});
+
 function esc(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// First Navidrome queue sensor (identified by its `tracks` attribute). Used
+// for the card picker stub.
+function findQueueSensor(hass) {
+  const isQueue = (id) => Array.isArray(hass.states[id]?.attributes?.tracks);
+  const ids = Object.keys(hass?.states ?? {}).filter(
+    (id) => id.startsWith("sensor.") && isQueue(id)
+  );
+  return (
+    ids.find((id) => hass.entities?.[id]?.platform === DOMAIN) ??
+    ids.find((id) => id.includes(DOMAIN)) ??
+    ""
+  );
 }
 
 class NavidromeQueueCard extends HTMLElement {
@@ -37,24 +62,15 @@ class NavidromeQueueCard extends HTMLElement {
     if (!config.entity) {
       throw new Error("Please define a queue sensor entity");
     }
-    this._config = {
-      entity: config.entity,
-      player_entity: config.player_entity || null,
-      max_visible: config.max_visible || 10,
-      title: config.title || "Queue",
-      ...config,
-    };
+    this._config = { ...DEFAULTS, ...config };
   }
 
   getCardSize() {
     return 4;
   }
 
-  static getStubConfig() {
-    return {
-      entity: "sensor.navidrome_ryosukemorino_com_queue",
-      max_visible: 10,
-    };
+  static getStubConfig(hass) {
+    return { entity: findQueueSensor(hass) };
   }
 
   _playerEntityId() {
@@ -179,7 +195,7 @@ class NavidromeQueueCard extends HTMLElement {
         }
         .nq-list {
           padding: 4px 0 8px;
-          max-height: ${this._config.max_visible * 44}px;
+          max-height: ${this._config.max_visible * ROW_HEIGHT_PX}px;
           overflow-y: auto;
           scroll-behavior: smooth;
         }
@@ -397,7 +413,7 @@ class NavidromeQueueCard extends HTMLElement {
 
     this._hass.callService("media_player", "play_media", {
       entity_id: this._playerEntityId(),
-      media_content_id: `media-source://navidrome/song/${track.song_id}`,
+      media_content_id: `${SONG_ID_PREFIX}${track.song_id}`,
       media_content_type: "music",
     });
   }
@@ -415,7 +431,7 @@ class NavidromeQueueCard extends HTMLElement {
 
   _reorderTrack(fromIndex, toIndex) {
     if (!this._hass) return;
-    this._hass.callService("navidrome", "reorder_queue", {
+    this._hass.callService(DOMAIN, "reorder_queue", {
       from_index: fromIndex,
       to_index: toIndex,
     });
@@ -423,7 +439,7 @@ class NavidromeQueueCard extends HTMLElement {
 
   _clearQueue() {
     if (!this._hass) return;
-    this._hass.callService("navidrome", "clear_queue", {});
+    this._hass.callService(DOMAIN, "clear_queue", {});
   }
 }
 

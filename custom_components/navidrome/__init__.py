@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import hashlib
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -19,10 +21,41 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .api import AuthenticationFailed, CannotConnect, NavidromeClient
-from .const import DOMAIN, LOGGER
+from .const import (
+    CONF_TARGET_PLAYER,
+    COVER_ART_CACHE_MAX_AGE,
+    COVER_ART_PROXY_PATH,
+    DEFAULT_MIME_TYPE,
+    DOMAIN,
+    FRONTEND_CARDS,
+    FRONTEND_URL_BASE,
+    LOGGER,
+    SERVICE_ADD_TO_PLAYLIST,
+    SERVICE_ADD_TO_QUEUE,
+    SERVICE_CLEAR_QUEUE,
+    SERVICE_REORDER_QUEUE,
+    SERVICE_SAVE_QUEUE_AS_PLAYLIST,
+    SIGNAL_QUEUE_UPDATED,
+)
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_queue"
+
+_FRONTEND_REGISTERED = f"{DOMAIN}_frontend_registered"
+
+SERVICE_SCHEMAS: dict[str, vol.Schema] = {
+    SERVICE_CLEAR_QUEUE: vol.Schema({}),
+    SERVICE_SAVE_QUEUE_AS_PLAYLIST: vol.Schema({vol.Required("name"): str}),
+    SERVICE_ADD_TO_PLAYLIST: vol.Schema({
+        vol.Required("playlist_id"): str,
+        vol.Required("song_id"): str,
+    }),
+    SERVICE_ADD_TO_QUEUE: vol.Schema({vol.Required("song_id"): str}),
+    SERVICE_REORDER_QUEUE: vol.Schema({
+        vol.Required("from_index"): int,
+        vol.Required("to_index"): int,
+    }),
+}
 
 
 @dataclass
@@ -56,7 +89,6 @@ class NavidromeData:
                 "queue_dirty": self.queue_dirty,
             })
         if self.hass and self.entry_id:
-            from .const import SIGNAL_QUEUE_UPDATED
             async_dispatcher_send(self.hass, f"{SIGNAL_QUEUE_UPDATED}_{self.entry_id}")
 
     async def load_queue(self) -> None:
@@ -151,30 +183,13 @@ async def async_setup_entry(
     # Register cover art proxy view
     hass.http.register_view(NavidromeCoverArtView(data))
 
-    # Register custom queue card frontend resource
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(
-            url_path="/navidrome/navidrome-queue-card.js",
-            path=hass.config.path("custom_components/navidrome/www/navidrome-queue-card.js"),
-            cache_headers=True,
-        )]
-    )
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(
-            url_path="/navidrome/navidrome-search-card.js",
-            path=hass.config.path("custom_components/navidrome/www/navidrome-search-card.js"),
-            cache_headers=True,
-        )]
-    )
-    from homeassistant.components.frontend import add_extra_js_url
-    add_extra_js_url(hass, "/navidrome/navidrome-queue-card.js?v=2")
-    add_extra_js_url(hass, "/navidrome/navidrome-search-card.js?v=3")
+    await _async_register_frontend(hass)
 
     # Register clear_queue service
     async def handle_clear_queue(call: ServiceCall) -> None:
         """Handle clear_queue service call."""
         await data.clear_queue()
-        target = entry.options.get("target_player")
+        target = entry.options.get(CONF_TARGET_PLAYER)
         if target:
             try:
                 await hass.services.async_call(
@@ -232,7 +247,7 @@ async def async_setup_entry(
         # If background worker is active it will pick up the appended track
         # (worker iterates data.queue as a live reference). Only enqueue
         # directly when no worker is running.
-        target = entry.options.get("target_player")
+        target = entry.options.get(CONF_TARGET_PLAYER)
         if target and not (data.enqueue_task and not data.enqueue_task.done()):
             async with data.target_lock:
                 await hass.services.async_call(
@@ -240,7 +255,7 @@ async def async_setup_entry(
                     {
                         "entity_id": target,
                         "media_content_id": async_process_play_media_url(hass, track["url"]),
-                        "media_content_type": "audio/mpeg",
+                        "media_content_type": DEFAULT_MIME_TYPE,
                         "enqueue": "add",
                     },
                     blocking=True,
@@ -286,26 +301,16 @@ async def async_setup_entry(
         )
 
     # Register all services
-    services = {
-        "clear_queue": (handle_clear_queue, vol.Schema({})),
-        "save_queue_as_playlist": (handle_save_queue_as_playlist, vol.Schema({
-            vol.Required("name"): str,
-        })),
-        "add_to_playlist": (handle_add_to_playlist, vol.Schema({
-            vol.Required("playlist_id"): str,
-            vol.Required("song_id"): str,
-        })),
-        "add_to_queue": (handle_add_to_queue, vol.Schema({
-            vol.Required("song_id"): str,
-        })),
-        "reorder_queue": (handle_reorder_queue, vol.Schema({
-            vol.Required("from_index"): int,
-            vol.Required("to_index"): int,
-        })),
+    handlers = {
+        SERVICE_CLEAR_QUEUE: handle_clear_queue,
+        SERVICE_SAVE_QUEUE_AS_PLAYLIST: handle_save_queue_as_playlist,
+        SERVICE_ADD_TO_PLAYLIST: handle_add_to_playlist,
+        SERVICE_ADD_TO_QUEUE: handle_add_to_queue,
+        SERVICE_REORDER_QUEUE: handle_reorder_queue,
     }
-    for name, (handler, schema) in services.items():
+    for name, schema in SERVICE_SCHEMAS.items():
         if not hass.services.has_service(DOMAIN, name):
-            hass.services.async_register(DOMAIN, name, handler, schema=schema)
+            hass.services.async_register(DOMAIN, name, handlers[name], schema=schema)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -317,16 +322,52 @@ async def async_unload_entry(
     """Unload a config entry."""
     entry.runtime_data.cancel_enqueue()
     await entry.runtime_data.save_queue()
-    for svc in ("clear_queue", "save_queue_as_playlist", "add_to_playlist", "add_to_queue", "reorder_queue"):
+    for svc in SERVICE_SCHEMAS:
         hass.services.async_remove(DOMAIN, svc)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Serve the bundled Lovelace cards and load them on every dashboard.
+
+    Runs once per HA start: re-registering on an entry reload would add
+    duplicate routes and load each card script twice. The ``?v=`` query is a
+    hash of the file content, so browsers fetch a changed card automatically.
+    """
+    if hass.data.get(_FRONTEND_REGISTERED):
+        return
+
+    from homeassistant.components.frontend import add_extra_js_url
+
+    www = Path(__file__).parent / "www"
+
+    def _content_hashes() -> dict[str, str]:
+        return {
+            name: hashlib.sha256((www / name).read_bytes()).hexdigest()[:8]
+            for name in FRONTEND_CARDS
+        }
+
+    hashes = await hass.async_add_executor_job(_content_hashes)
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                url_path=f"{FRONTEND_URL_BASE}/{name}",
+                path=str(www / name),
+                cache_headers=True,
+            )
+            for name in FRONTEND_CARDS
+        ]
+    )
+    for name, digest in hashes.items():
+        add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{name}?v={digest}")
+    hass.data[_FRONTEND_REGISTERED] = True
 
 
 class NavidromeCoverArtView(HomeAssistantView):
     """Proxy cover art requests through HA to avoid SSL issues."""
 
-    url = "/api/navidrome/cover_art/{item_id}"
-    name = "api:navidrome:cover_art"
+    url = f"{COVER_ART_PROXY_PATH}/{{item_id}}"
+    name = f"api:{DOMAIN}:cover_art"
     requires_auth = False
 
     def __init__(self, data: NavidromeData) -> None:
@@ -347,7 +388,9 @@ class NavidromeCoverArtView(HomeAssistantView):
                 return web.Response(
                     body=body,
                     content_type=content_type,
-                    headers={"Cache-Control": "public, max-age=86400"},
+                    headers={
+                        "Cache-Control": f"public, max-age={COVER_ART_CACHE_MAX_AGE}"
+                    },
                 )
         except Exception:
             LOGGER.debug("Failed to fetch cover art for %s", item_id)

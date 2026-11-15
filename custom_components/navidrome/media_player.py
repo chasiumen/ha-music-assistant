@@ -27,24 +27,45 @@ from homeassistant.components.media_player.browse_media import (
     SearchMedia,
     SearchMediaQuery,
 )
-from homeassistant.const import CONF_URL, STATE_PAUSED, STATE_PLAYING
+from homeassistant.const import STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from . import NavidromeConfigEntry, NavidromeData
 from .api import NavidromeClient
 from .const import (
+    CONF_CONTROL_GRACE_SECONDS,
+    CONF_PLAYLIST_CACHE_TTL,
     CONF_SCROBBLE_ENABLED,
+    CONF_SEARCH_RESULT_LIMIT,
     CONF_TARGET_PLAYER,
-    DOMAIN,
+    COVER_ART_PROXY_PATH,
+    DEFAULT_CONTROL_GRACE_SECONDS,
+    DEFAULT_MIME_TYPE,
+    DEFAULT_PLAYLIST_CACHE_TTL,
+    DEFAULT_SCROBBLE_ENABLED,
+    DEFAULT_SEARCH_RESULT_LIMIT,
     LOGGER,
-    PLAYLIST_CACHE_TTL_SECONDS,
-    TARGET_STATE_GRACE_SECONDS,
+    MEDIA_SOURCE_PREFIX,
+    PREFIX_ALBUM,
+    PREFIX_ARTIST,
+    PREFIX_PLAYLIST,
+    PREFIX_SONG,
 )
+from .entity import navidrome_device_info
 
 SERVICE_PLAY_MEDIA = "play_media"
+
+
+def _media_id(item_type: str, item_id: str) -> str:
+    """Build a media-source://navidrome/<type>/<id> content ID."""
+    return f"{MEDIA_SOURCE_PREFIX}/{item_type}/{item_id}"
+
+
+def _cover_art_proxy_url(cover_art: str | None) -> str | None:
+    """Return the local cover-art proxy URL for a coverArt ID, if any."""
+    return f"{COVER_ART_PROXY_PATH}/{cover_art}" if cover_art else None
 
 _BASE_FEATURES = (
     MediaPlayerEntityFeature.PLAY
@@ -95,13 +116,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         """Initialize the media player."""
         self._entry = entry
         self._attr_unique_id = entry.entry_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="Navidrome",
-            model="Music Server",
-            name=entry.title,
-            configuration_url=entry.data.get(CONF_URL),
-        )
+        self._attr_device_info = navidrome_device_info(entry)
         self._unsub_state_listener: callback | None = None
         self._optimistic_deadline: float = 0.0
         self._repeat_grace_deadline: float = 0.0
@@ -197,7 +212,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     def _set_optimistic_state(self, state: MediaPlayerState) -> None:
         """Set an optimistic state with a grace window to protect against stale target events."""
         self._attr_state = state
-        self._optimistic_deadline = time.monotonic() + TARGET_STATE_GRACE_SECONDS
+        self._optimistic_deadline = time.monotonic() + self.control_grace_seconds
         self.async_write_ha_state()
 
     @property
@@ -218,7 +233,33 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     @property
     def scrobble_enabled(self) -> bool:
         """Return whether scrobbling is enabled."""
-        return self._entry.options.get(CONF_SCROBBLE_ENABLED, False)
+        return self._entry.options.get(CONF_SCROBBLE_ENABLED, DEFAULT_SCROBBLE_ENABLED)
+
+    # Tunables: an option set in Configure overrides the const.py default.
+    # Options are read on every use, so changes apply without a reload.
+
+    @property
+    def search_result_limit(self) -> int:
+        """Return the max songs/albums/artists fetched per search."""
+        return int(
+            self._entry.options.get(CONF_SEARCH_RESULT_LIMIT, DEFAULT_SEARCH_RESULT_LIMIT)
+        )
+
+    @property
+    def playlist_cache_ttl(self) -> float:
+        """Return how long (s) the playlist list for search is cached."""
+        return float(
+            self._entry.options.get(CONF_PLAYLIST_CACHE_TTL, DEFAULT_PLAYLIST_CACHE_TTL)
+        )
+
+    @property
+    def control_grace_seconds(self) -> float:
+        """Return the optimistic-state grace window (s) after a control action."""
+        return float(
+            self._entry.options.get(
+                CONF_CONTROL_GRACE_SECONDS, DEFAULT_CONTROL_GRACE_SECONDS
+            )
+        )
 
     async def _proxy_command(self, service: str, **kwargs: Any) -> None:
         """Forward a media player command to the target player (lock-protected)."""
@@ -261,7 +302,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     async def async_set_repeat(self, repeat: RepeatMode) -> None:
         """Set repeat mode, persist it, and proxy to target."""
         self._attr_repeat = repeat
-        self._repeat_grace_deadline = time.monotonic() + TARGET_STATE_GRACE_SECONDS
+        self._repeat_grace_deadline = time.monotonic() + self.control_grace_seconds
         self.async_write_ha_state()
         self.data.repeat_mode = repeat.value
         self.hass.async_create_task(self.data.save_queue())
@@ -286,11 +327,12 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         query: SearchMediaQuery,
     ) -> SearchMedia:
         """Search the Navidrome library (songs, albums, artists, playlists)."""
+        limit = self.search_result_limit
         results = await self.client.search3(
             query.search_query,
-            song_count=500,
-            album_count=500,
-            artist_count=500,
+            song_count=limit,
+            album_count=limit,
+            artist_count=limit,
         )
 
         items: list[BrowseMedia] = []
@@ -320,7 +362,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             items.append(
                 BrowseMedia(
                     media_class=MediaClass.ALBUM,
-                    media_content_id=f"media-source://navidrome/album/{album['id']}",
+                    media_content_id=_media_id(PREFIX_ALBUM, album["id"]),
                     media_content_type=MediaType.MUSIC,
                     title=display,
                     can_play=True,
@@ -335,7 +377,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             items.append(
                 BrowseMedia(
                     media_class=MediaClass.ARTIST,
-                    media_content_id=f"media-source://navidrome/artist/{artist['id']}",
+                    media_content_id=_media_id(PREFIX_ARTIST, artist["id"]),
                     media_content_type=MediaType.MUSIC,
                     title=artist.get("name", "Unknown Artist"),
                     can_play=False,
@@ -355,7 +397,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             now = time.monotonic()
             if (
                 self._playlist_cache is None
-                or now - self._playlist_cache_time > PLAYLIST_CACHE_TTL_SECONDS
+                or now - self._playlist_cache_time >= self.playlist_cache_ttl
             ):
                 try:
                     self._playlist_cache = await self.client.get_playlists()
@@ -371,7 +413,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     items.append(
                         BrowseMedia(
                             media_class=MediaClass.PLAYLIST,
-                            media_content_id=f"media-source://navidrome/playlist/{playlist['id']}",
+                            media_content_id=_media_id(PREFIX_PLAYLIST, playlist["id"]),
                             media_content_type=MediaType.MUSIC,
                             title=playlist.get("name", "Unknown Playlist"),
                             can_play=True,
@@ -452,7 +494,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         play_data: dict[str, Any] = {
             "entity_id": target,
             "media_content_id": async_process_play_media_url(self.hass, first["url"]),
-            "media_content_type": "audio/mpeg",
+            "media_content_type": DEFAULT_MIME_TYPE,
         }
         if first.get("title") or first.get("coverArt"):
             play_data["extra"] = {
@@ -526,15 +568,12 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
     def _update_media_attributes(self, track: dict[str, Any]) -> None:
         """Update entity media attributes from a track dict."""
         self._attr_media_content_id = track.get("url")
-        self._attr_media_content_type = "audio/mpeg"
+        self._attr_media_content_type = DEFAULT_MIME_TYPE
         self._attr_media_title = track.get("title")
         self._attr_media_artist = track.get("artist")
         self._attr_media_album_name = track.get("album")
         self._attr_media_duration = track.get("duration")
-        cover_art = track.get("coverArt")
-        self._cover_art_url = (
-            f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
-        )
+        self._cover_art_url = _cover_art_proxy_url(track.get("coverArt"))
 
     async def _enqueue_worker(self, target: str, start_index: int) -> None:
         """Background task: enqueue data.queue[start_index:] on the target player.
@@ -554,7 +593,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                             "media_content_id": async_process_play_media_url(
                                 self.hass, track["url"]
                             ),
-                            "media_content_type": "audio/mpeg",
+                            "media_content_type": DEFAULT_MIME_TYPE,
                             "enqueue": "add",
                         },
                         blocking=True,
@@ -590,7 +629,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     LOGGER.debug("Failed to fetch metadata for %s", song_id)
             return [track]
 
-        uri = media_id.replace("media-source://navidrome/", "")
+        uri = media_id.replace(f"{MEDIA_SOURCE_PREFIX}/", "")
         parts = uri.split("/", 1)
         if len(parts) != 2:
             play_item = await media_source.async_resolve_media(
@@ -600,7 +639,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
 
         item_type, item_id = parts
 
-        if item_type == "song":
+        if item_type == PREFIX_SONG:
             track = {"id": item_id, "url": self.client.stream_url(item_id)}
             try:
                 song = await self.client.get_song(item_id)
@@ -615,13 +654,13 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                 LOGGER.debug("Failed to fetch metadata for %s", item_id)
             return [track]
 
-        if item_type == "album":
+        if item_type == PREFIX_ALBUM:
             album = await self.client.get_album(item_id)
             songs = album.get("song", [])
             songs.sort(key=lambda s: (s.get("discNumber", 0), s.get("track", 0)))
             return [self._song_to_track(s) for s in songs]
 
-        if item_type == "playlist":
+        if item_type == PREFIX_PLAYLIST:
             playlist = await self.client.get_playlist(item_id)
             entries = playlist.get("entry", [])
             return [self._song_to_track(e) for e in entries]
@@ -636,9 +675,9 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         if not self.data.queue:
             return None
 
-        song_id = None
-        if media_id.startswith("media-source://navidrome/song/"):
-            song_id = media_id.replace("media-source://navidrome/song/", "")
+        song_prefix = _media_id(PREFIX_SONG, "")
+        if media_id.startswith(song_prefix):
+            song_id = media_id.removeprefix(song_prefix)
         else:
             song_id = self._extract_song_id_from_url(media_id)
 
@@ -683,7 +722,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
             {
                 "entity_id": target,
                 "media_content_id": async_process_play_media_url(self.hass, first["url"]),
-                "media_content_type": "audio/mpeg",
+                "media_content_type": DEFAULT_MIME_TYPE,
             },
             blocking=True,
         )
@@ -721,10 +760,7 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
                     LOGGER.info("Queue advanced to index %d: %s", i, title)
                     self.data.current_index = i
                     self.hass.async_create_task(self.data.save_queue())
-                    cover_art = track.get("coverArt")
-                    self._cover_art_url = (
-                        f"/api/navidrome/cover_art/{cover_art}" if cover_art else None
-                    )
+                    self._cover_art_url = _cover_art_proxy_url(track.get("coverArt"))
                     if self.scrobble_enabled and track.get("id"):
                         self.hass.async_create_task(
                             self._scrobble_track(track["id"])
@@ -808,11 +844,11 @@ class NavidromeMediaPlayer(MediaPlayerEntity):
         )
 
         if media_content_id:
-            if media_content_id.startswith("media-source://"):
+            if media_source.is_media_source_id(media_content_id):
                 uri = media_content_id
             else:
-                uri = f"media-source://navidrome/{media_content_id}"
+                uri = f"{MEDIA_SOURCE_PREFIX}/{media_content_id}"
         else:
-            uri = "media-source://navidrome"
+            uri = MEDIA_SOURCE_PREFIX
 
         return await ms_browse(self.hass, uri)

@@ -40,11 +40,17 @@
         "description": "Configure playback settings.",
         "data": {
           "target_player": "Target media player",
-          "scrobble_enabled": "Enable scrobbling"
+          "scrobble_enabled": "Enable scrobbling",
+          "search_result_limit": "Search result limit",
+          "playlist_cache_ttl": "Playlist cache duration",
+          "control_grace_seconds": "Control grace window"
         },
         "data_description": {
           "target_player": "The media player that will play audio from Navidrome (e.g., a Sonos speaker, Chromecast, or browser player)",
-          "scrobble_enabled": "Send 'now playing' status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins."
+          "scrobble_enabled": "Send 'now playing' status to Navidrome when music plays. Enables Discord status, Last.fm, and other scrobble-based plugins.",
+          "search_result_limit": "Maximum songs, albums and artists fetched per search. Cards trim how many they display. Default: 500.",
+          "playlist_cache_ttl": "How long the playlist list used for playlist search is cached, in seconds. 0 disables caching. Default: 30.",
+          "control_grace_seconds": "After play, pause, stop or repeat changes, ignore contradicting updates from the target player for this many seconds so stale events don't flip the controls back. Default: 10."
         }
       }
     }
